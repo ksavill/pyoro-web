@@ -1,0 +1,13 @@
+{
+  "name": "pyoro-web-workspace",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Workspace entrypoint for the Pyoro browser-native web port.",
+  "scripts": {
+    "dev": "npm --prefix Pyoro run dev --",
+    "start": "npm --prefix Pyoro run start --",
+    "check": "npm --prefix Pyoro run check",
+    "train:agent": "npm --prefix Pyoro run train:agent --",
+    "evaluate:agent": "npm --prefix Pyoro run evaluate:agent --"
+  }
+}

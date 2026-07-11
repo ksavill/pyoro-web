@@ -1,0 +1,45 @@
+# Node
+node_modules/
+npm-debug.log*
+
+# Python bytecode (defensive; the Python sources themselves are ignored below)
+*.pyc
+__pycache__/
+
+# --- Upstream Pyoro Python implementation (github.com/RedbeanGit/Pyoro) ---
+# The legacy Python game is a local reference only and must not be committed.
+# Everything under Pyoro/src is ignored except the game assets the web
+# runtime actually loads (see Pyoro/web/app.js manifests).
+Pyoro/src/*
+!Pyoro/src/data/
+Pyoro/src/data/*
+
+# Audio: only the sound/music files the web game plays
+!Pyoro/src/data/audio/
+Pyoro/src/data/audio/*
+!Pyoro/src/data/audio/musics/
+!Pyoro/src/data/audio/sounds/
+
+# Images: level tiles/backgrounds, entity sprites, and the three GUI files
+# the web page uses (font, title, favicon)
+!Pyoro/src/data/images/
+Pyoro/src/data/images/*
+!Pyoro/src/data/images/level/
+!Pyoro/src/data/images/entities/
+Pyoro/src/data/images/entities/score text/
+!Pyoro/src/data/images/gui/
+Pyoro/src/data/images/gui/*
+!Pyoro/src/data/images/gui/font.ttf
+!Pyoro/src/data/images/gui/title.png
+!Pyoro/src/data/images/gui/pyoro_icon.png
+
+# Upstream sprite-naming notes, not needed by the web runtime
+name_format.txt
+
+# Other upstream files not used by the web version
+Pyoro/Pipfile
+Pyoro/Pipfile.lock
+Pyoro/Pyoro.png
+
+# Generated training artifacts (the final agent models ARE committed)
+Pyoro/web/models/*.candidate.json

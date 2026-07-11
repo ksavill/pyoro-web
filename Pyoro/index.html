@@ -1,0 +1,177 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Pyoro Web</title>
+  <meta
+    name="description"
+    content="A browser-playable web port of the Pyoro Python fan game."
+  >
+  <link rel="icon" type="image/png" href="src/data/images/gui/pyoro_icon.png">
+  <link rel="stylesheet" href="web/styles.css">
+</head>
+<body>
+  <main class="app-shell">
+    <header class="topbar">
+      <div class="branding">
+        <img
+          class="title-image"
+          src="src/data/images/gui/title.png"
+          alt="Pyoro"
+        >
+        <p class="subtitle">Standalone browser-native port of the original Pyoro fan game</p>
+      </div>
+      <div class="status-panel">
+        <div class="metric">
+          <span class="label">Score</span>
+          <strong id="scoreValue">0</strong>
+        </div>
+        <div class="metric">
+          <span class="label">High Score</span>
+          <strong id="highScoreValue">0</strong>
+        </div>
+        <div class="metric">
+          <span class="label">Mode</span>
+          <strong id="modeValue">Pyoro</strong>
+        </div>
+        <div class="metric">
+          <span class="label">Holes</span>
+          <strong id="holesValue">0</strong>
+        </div>
+        <div class="metric">
+          <span class="label">Speed</span>
+          <strong id="speedValue">1.00x</strong>
+        </div>
+        <div class="metric metric-wide">
+          <span class="label">Status</span>
+          <strong id="statusValue">Loading...</strong>
+        </div>
+      </div>
+    </header>
+
+    <section class="mode-strip">
+      <div class="mode-picker" aria-label="Select game mode">
+        <button class="mode-button" id="modeClassicButton" data-mode-button="0" type="button">
+          Pyoro
+        </button>
+        <button class="mode-button" id="modeAdvancedButton" data-mode-button="1" type="button">
+          Pyoro 2
+        </button>
+      </div>
+      <p class="mode-hint" id="modeHint">
+        Catch falling beans with a diagonal tongue. Pyoro 2 is available from the mode selector whenever you want to switch.
+      </p>
+    </section>
+
+    <section class="actions">
+      <button id="startButton" type="button">New Run</button>
+      <button id="pauseButton" type="button" disabled>Pause</button>
+      <button id="aiButton" type="button" disabled>AI: Loading...</button>
+      <button id="muteButton" type="button">Sound: Off</button>
+      <button id="musicButton" type="button">Music: Off</button>
+      <button id="fullscreenButton" type="button">Fullscreen</button>
+      <button id="stretchButton" type="button">Stretch: Off</button>
+    </section>
+
+    <section class="game-card">
+      <div class="canvas-frame">
+        <canvas
+          id="gameCanvas"
+          width="1280"
+          height="720"
+          aria-label="Pyoro web game"
+        ></canvas>
+        <div class="overlay" id="overlay">
+          <div class="overlay-card">
+            <h1 id="overlayTitle">Loading Pyoro Web...</h1>
+            <p id="overlayMessage">Preparing sprites and sounds.</p>
+            <button id="overlayButton" type="button" disabled>Loading...</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="help-grid">
+      <div class="help-card">
+        <h2>Keyboard</h2>
+        <p><kbd>A</kbd> / <kbd>Left</kbd> move left</p>
+        <p><kbd>D</kbd> / <kbd>Right</kbd> move right</p>
+        <p><kbd>Space</kbd> shoot / recall tongue</p>
+        <p><kbd>P</kbd> or <kbd>Esc</kbd> pause</p>
+        <p><kbd>F</kbd> toggle fullscreen</p>
+        <p><kbd>R</kbd> restart</p>
+      </div>
+
+      <div class="help-card">
+        <h2>Touch Controls</h2>
+        <div class="touch-controls">
+          <button class="touch-button" data-control="left" type="button">Left</button>
+          <button class="touch-button action" data-control="action" type="button">Action</button>
+          <button class="touch-button" data-control="right" type="button">Right</button>
+          <button class="touch-button pause" data-control="pause" type="button">Pause</button>
+        </div>
+      </div>
+
+      <div class="help-card">
+        <h2 id="abilityTitle">Mode Ability</h2>
+        <p id="abilityDescription">Catch falling beans with Pyoro's diagonal tongue.</p>
+        <p id="abilityScoring">Pink beans repair a hole. Super beans repair many holes and clear the sky.</p>
+        <p id="abilityRisk">Missing a bean breaks the floor. A bean hitting Pyoro ends the run.</p>
+      </div>
+
+      <div class="help-card">
+        <h2>Project Status</h2>
+        <p>This repo now treats the browser version as the main runtime.</p>
+        <p>The original Python source under <code>src</code> stays as a legacy reference and shared asset source.</p>
+        <p>The game can be hosted as static files with no Python runtime in production.</p>
+        <p>Optional AI play is enabled only when a trained model file is present for the selected mode.</p>
+      </div>
+
+      <div class="help-card">
+        <h2>AI Diagnostics</h2>
+        <div class="diagnostics-grid">
+          <div class="diagnostic-row">
+            <span class="label">Status</span>
+            <strong id="aiDebugStatus">Loading</strong>
+          </div>
+          <div class="diagnostic-row">
+            <span class="label">Model</span>
+            <strong id="aiDebugModel">No model</strong>
+          </div>
+          <div class="diagnostic-row">
+            <span class="label">Chosen</span>
+            <strong id="aiDebugAction">No action</strong>
+          </div>
+          <div class="diagnostic-row">
+            <span class="label">Top Choices</span>
+            <strong id="aiDebugTopChoices">No probabilities</strong>
+          </div>
+          <div class="diagnostic-row">
+            <span class="label">Heuristic</span>
+            <strong id="aiDebugHeuristic">No heuristic</strong>
+          </div>
+          <div class="diagnostic-row">
+            <span class="label">Agreement</span>
+            <strong id="aiDebugAgreement">N/A</strong>
+          </div>
+          <div class="diagnostic-row">
+            <span class="label">Behavior</span>
+            <strong id="aiDebugBehavior">No behavior data</strong>
+          </div>
+          <div class="diagnostic-row">
+            <span class="label">Target</span>
+            <strong id="aiDebugTarget">No target</strong>
+          </div>
+          <div class="diagnostic-row">
+            <span class="label">Floor</span>
+            <strong id="aiDebugFloor">No board data</strong>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <script type="module" src="web/app.js"></script>
+</body>
+</html>

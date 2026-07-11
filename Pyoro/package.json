@@ -1,0 +1,14 @@
+{
+  "name": "pyoro-web",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Browser-native web port of Pyoro.",
+  "scripts": {
+    "dev": "node scripts/dev-server.mjs",
+    "start": "node scripts/dev-server.mjs",
+    "check": "node scripts/check.mjs",
+    "train:agent": "node scripts/train-agent.mjs",
+    "evaluate:agent": "node scripts/evaluate-agent.mjs"
+  }
+}

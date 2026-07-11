@@ -1,0 +1,4448 @@
+import {
+  ACTION_DEFINITIONS,
+  inferPolicyLogits,
+  loadPolicyModelFromUrl,
+  softmax,
+} from "./agent-policy.js";
+import { heuristicDecisionForGame } from "./heuristic-policy.js";
+
+const CONFIG = Object.freeze({
+  worldWidth: 32,
+  worldHeight: 18,
+  unit: 40,
+  maxFrameDelta: 0.05,
+  speedAcceleration: 0.01,
+  backgroundTransitionDuration: 3,
+  backgroundAnimatedDuration: 1,
+  beanFrequency: 2,
+  beanSpeed: 1.8,
+  beanSpriteDuration: 0.2,
+  pyoroSpeed: 25,
+  pyoroDieSpeed: 2,
+  pyoroNotchDuration: 0.01,
+  pyoroEatingDuration: 0.04,
+  pyoro2ShootDuration: 0.1,
+  tongueSpeed: 25,
+  angelSpeed: 35,
+  angelSpriteDuration: 0.5,
+  seedSpeed: 45,
+  airResistance: 25,
+  gravityForce: 9.81,
+  leafSpeed: 1.5,
+  leafSpriteDuration: 0.2,
+  leafWindSpeed: 15,
+  smokeSpriteDuration: 0.2,
+  audioSpeedAcceleration: 0.002,
+  scorePopupBlinkDuration: 0.05,
+  scorePopupLife: 0.3,
+});
+
+const STORAGE_KEY = "pyoro-web-save-v2";
+const LEGACY_HIGH_SCORE_KEY = "pyoro-web-high-score";
+
+const GAME_MODES = Object.freeze([
+  {
+    id: 0,
+    key: "pyoro1",
+    label: "Pyoro",
+    backgroundSet: 1,
+    description: "Catch falling beans with Pyoro's diagonal tongue.",
+    scoring:
+      "Score more by catching beans higher in the sky. Pink beans repair a hole and super beans repair many holes while clearing the sky.",
+    risk: "Missing beans breaks the floor, and a bean hitting Pyoro ends the run.",
+  },
+  {
+    id: 1,
+    key: "pyoro2",
+    label: "Pyoro 2",
+    backgroundSet: 2,
+    description: "Shoot diagonally to slice beans out of the air instead of using a tongue.",
+    scoring:
+      "Cutting 1, 2, 3, or 4+ beans in one shot scores 50, 100, 300, or 1000 points for each bean hit.",
+    risk: "Pink and super beans still keep their repair and chain-reaction effects, but dropped beans can still destroy the floor or hit Pyoro.",
+  },
+]);
+
+const AI_MODEL_PATHS = Object.freeze({
+  pyoro1: "web/models/pyoro1-agent.json",
+  pyoro2: "web/models/pyoro2-agent.json",
+});
+
+const POLICY_TOP_BEAN_COUNT = 8;
+const POLICY_SPECIAL_FEATURE_COUNT = 15;
+
+const SOUND_MANIFEST = Object.freeze({
+  angel_down: "src/data/audio/sounds/angel_down.wav",
+  bean_cut: "src/data/audio/sounds/bean_cut.wav",
+  bean_explode: "src/data/audio/sounds/bean_explode.wav",
+  bean_implode: "src/data/audio/sounds/bean_implode.wav",
+  pyoro_die: "src/data/audio/sounds/pyoro_die.wav",
+  pyoro_eat: "src/data/audio/sounds/pyoro_eat.wav",
+  pyoro_move: "src/data/audio/sounds/pyoro_move.wav",
+  tongue: "src/data/audio/sounds/tongue.wav",
+});
+
+const MUSIC_MANIFEST = Object.freeze({
+  intro: "src/data/audio/musics/intro.wav",
+  music_0: "src/data/audio/musics/music_0.wav",
+  music_1: "src/data/audio/musics/music_1.wav",
+  music_2: "src/data/audio/musics/music_2.wav",
+  drums: "src/data/audio/musics/drums.wav",
+  organ: "src/data/audio/musics/organ.wav",
+  speed_drums: "src/data/audio/musics/speed_drums.wav",
+  game_over: "src/data/audio/musics/game_over.wav",
+});
+
+function buildImageManifest() {
+  const manifest = {};
+
+  for (let backgroundSet = 1; backgroundSet <= 2; backgroundSet += 1) {
+    for (let index = 0; index <= 20; index += 1) {
+      manifest[`background_${backgroundSet}_${index}`] =
+        `src/data/images/level/background ${backgroundSet}/background_${index}.png`;
+    }
+  }
+
+  for (let style = 0; style <= 2; style += 1) {
+    manifest[`block_${style}`] = `src/data/images/level/block/block_${style}.png`;
+    manifest[`seed_${style}`] = `src/data/images/entities/seed/seed_${style}.png`;
+
+    for (const direction of [-1, 1]) {
+      manifest[`tongue_${style}_${direction}`] =
+        `src/data/images/entities/tongue/tongue_${style}_${direction}.png`;
+
+      for (const state of ["normal", "jump", "die"]) {
+        manifest[`pyoro_${style}_${state}_${direction}`] =
+          `src/data/images/entities/pyoro 1/pyoro_${style}_${state}_${direction}.png`;
+        manifest[`pyoro2_${style}_${state}_${direction}`] =
+          `src/data/images/entities/pyoro 2/pyoro_${style}_${state}_${direction}.png`;
+      }
+
+      for (const mouth of [0, 1]) {
+        manifest[`pyoro_${style}_eat_${mouth}_${direction}`] =
+          `src/data/images/entities/pyoro 1/pyoro_${style}_eat_${mouth}_${direction}.png`;
+      }
+
+      for (let frame = 0; frame <= 3; frame += 1) {
+        manifest[`pyoro2_${style}_shoot_${frame}_${direction}`] =
+          `src/data/images/entities/pyoro 2/pyoro_${style}_shoot_${frame}_${direction}.png`;
+      }
+    }
+
+    for (let frame = 0; frame <= 2; frame += 1) {
+      manifest[`bean_${style}_${frame}`] =
+        `src/data/images/entities/bean/bean_${style}_${frame}.png`;
+      manifest[`pink_bean_${style}_${frame}`] =
+        `src/data/images/entities/pink bean/bean_${style}_${frame}.png`;
+      manifest[`leaf_normal_${style}_${frame}`] =
+        `src/data/images/entities/leaf/leaf_${style}_${frame}.png`;
+      manifest[`leaf_pink_${style}_${frame}`] =
+        `src/data/images/entities/pink leaf/leaf_${style}_${frame}.png`;
+      manifest[`leaf_super_${style}_${frame}`] =
+        `src/data/images/entities/super leaf/leaf_${style}_${frame}.png`;
+      manifest[`leafpiece_normal_${style}_${frame}`] =
+        `src/data/images/entities/leaf piece/leafpiece_${style}_${frame}.png`;
+      manifest[`leafpiece_pink_${style}_${frame}`] =
+        `src/data/images/entities/pink leaf piece/leafpiece_${style}_${frame}.png`;
+      manifest[`leafpiece_super_${style}_${frame}`] =
+        `src/data/images/entities/super leaf piece/leafpiece_${style}_${frame}.png`;
+    }
+
+    for (let frame = 0; frame <= 1; frame += 1) {
+      manifest[`angel_${style}_${frame}`] =
+        `src/data/images/entities/angel/angel_${style}_${frame}.png`;
+    }
+
+    for (let frame = 0; frame <= 2; frame += 1) {
+      manifest[`smoke_${style}_${frame}`] =
+        `src/data/images/entities/smoke/smoke_${style}_${frame}.png`;
+    }
+  }
+
+  for (let sprite = 0; sprite <= 2; sprite += 1) {
+    for (let frame = 0; frame <= 5; frame += 1) {
+      manifest[`super_bean_${sprite}_${frame}`] =
+        `src/data/images/entities/super bean/bean_${sprite}_${frame}.png`;
+    }
+  }
+
+  return manifest;
+}
+
+function clamp(value, min, max) {
+  return Math.max(min, Math.min(max, value));
+}
+
+function randomRange(min, max) {
+  return min + Math.random() * (max - min);
+}
+
+function choice(values) {
+  return values[Math.floor(Math.random() * values.length)];
+}
+
+function formatScore(value) {
+  return new Intl.NumberFormat("en-US").format(value);
+}
+
+function normalizeSeed(value = Date.now()) {
+  const parsed = Number.parseInt(String(value ?? 0), 10);
+  return ((Number.isFinite(parsed) ? parsed : 1) >>> 0) || 1;
+}
+
+function createSeededRandom(seed = Date.now()) {
+  let state = normalizeSeed(seed);
+  return () => {
+    state += 0x6d2b79f5;
+    let value = state;
+    value = Math.imul(value ^ (value >>> 15), value | 1);
+    value ^= value + Math.imul(value ^ (value >>> 7), value | 61);
+    return ((value ^ (value >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+function browserStorage() {
+  if (typeof window === "undefined") {
+    return null;
+  }
+
+  try {
+    return window.localStorage ?? null;
+  } catch (_error) {
+    return null;
+  }
+}
+
+function createStubClassList() {
+  return {
+    add() {},
+    remove() {},
+    toggle() {
+      return false;
+    },
+  };
+}
+
+function createStubElement() {
+  return {
+    textContent: "",
+    disabled: false,
+    classList: createStubClassList(),
+    setAttribute() {},
+    addEventListener() {},
+    getAttribute() {
+      return null;
+    },
+  };
+}
+
+function actionLabelForIndex(actionIndex = 0) {
+  return (ACTION_DEFINITIONS[actionIndex] || ACTION_DEFINITIONS[0]).label;
+}
+
+function topProbabilityChoices(probabilities, limit = 3) {
+  return probabilities
+    .map((probability, index) => ({
+      probability,
+      index,
+      label: actionLabelForIndex(index),
+    }))
+    .sort((left, right) => right.probability - left.probability)
+    .slice(0, limit);
+}
+
+async function fetchAudioObjectUrl(source) {
+  const response = await fetch(source);
+  if (!response.ok) {
+    throw new Error(`Unable to load audio asset: ${source}`);
+  }
+
+  const blob = await response.blob();
+  return URL.createObjectURL(blob);
+}
+
+function waitForAudioReady(audio) {
+  return new Promise((resolve, reject) => {
+    if (audio.readyState >= 2) {
+      resolve(audio);
+      return;
+    }
+
+    const cleanup = () => {
+      audio.removeEventListener("loadeddata", onReady);
+      audio.removeEventListener("canplaythrough", onReady);
+      audio.removeEventListener("error", onError);
+    };
+
+    const onReady = () => {
+      cleanup();
+      resolve(audio);
+    };
+
+    const onError = () => {
+      cleanup();
+      reject(new Error(`Unable to prepare audio element for ${audio.currentSrc || audio.src}`));
+    };
+
+    audio.addEventListener("loadeddata", onReady, { once: true });
+    audio.addEventListener("canplaythrough", onReady, { once: true });
+    audio.addEventListener("error", onError, { once: true });
+    audio.load();
+  });
+}
+
+async function createPreparedAudio(objectUrl, options = {}) {
+  const audio = new Audio(objectUrl);
+  audio.preload = "auto";
+  audio.loop = options.loop ?? false;
+  // The original resamples audio when the game speeds it up, so pitch should
+  // rise with playback rate instead of being time-stretched.
+  audio.preservesPitch = false;
+  audio.webkitPreservesPitch = false;
+  return waitForAudioReady(audio);
+}
+
+function toNonNegativeInt(value) {
+  const number = Number.parseInt(String(value ?? 0), 10);
+  return Number.isFinite(number) && number > 0 ? number : 0;
+}
+
+function defaultSaveState() {
+  return {
+    selectedMode: 0,
+    soundEnabled: false,
+    musicEnabled: false,
+    stretchFullscreen: false,
+    highScores: {
+      pyoro1: 0,
+      pyoro2: 0,
+    },
+  };
+}
+
+function sanitizeSaveState(raw) {
+  const defaults = defaultSaveState();
+  const storage = browserStorage();
+  const legacyHighScore = toNonNegativeInt(
+    raw?.highScore ?? raw?.high_score ?? storage?.getItem(LEGACY_HIGH_SCORE_KEY),
+  );
+  const highScores = raw?.highScores && typeof raw.highScores === "object"
+    ? raw.highScores
+    : {};
+  const pyoro1HighScore = Math.max(
+    legacyHighScore,
+    toNonNegativeInt(highScores.pyoro1 ?? highScores.classic ?? defaults.highScores.pyoro1),
+  );
+  const pyoro2HighScore = toNonNegativeInt(
+    highScores.pyoro2 ?? highScores.advanced ?? defaults.highScores.pyoro2,
+  );
+
+  const selectedMode = raw?.selectedMode === 1 ? 1 : 0;
+
+  return {
+    selectedMode,
+    soundEnabled: Boolean(raw?.soundEnabled),
+    musicEnabled: Boolean(raw?.musicEnabled),
+    stretchFullscreen: Boolean(raw?.stretchFullscreen ?? raw?.stretchToFill),
+    highScores: {
+      pyoro1: pyoro1HighScore,
+      pyoro2: pyoro2HighScore,
+    },
+  };
+}
+
+function readSaveState() {
+  const storage = browserStorage();
+  if (!storage) {
+    return sanitizeSaveState({});
+  }
+
+  try {
+    const raw = storage.getItem(STORAGE_KEY);
+    if (raw) {
+      return sanitizeSaveState(JSON.parse(raw));
+    }
+  } catch (_error) {
+    return sanitizeSaveState({});
+  }
+
+  return sanitizeSaveState({});
+}
+
+function writeSaveState(saveState) {
+  const storage = browserStorage();
+  if (!storage) {
+    return;
+  }
+
+  try {
+    storage.setItem(STORAGE_KEY, JSON.stringify(saveState));
+  } catch (_error) {
+    return;
+  }
+}
+
+class AssetStore {
+  constructor(manifest) {
+    this.manifest = manifest;
+    this.images = new Map();
+  }
+
+  async load() {
+    const entries = Object.entries(this.manifest);
+
+    await Promise.all(
+      entries.map(([key, source]) => new Promise((resolve, reject) => {
+        const image = new Image();
+        image.decoding = "async";
+        image.onload = () => {
+          this.images.set(key, image);
+          resolve();
+        };
+        image.onerror = () => {
+          reject(new Error(`Unable to load image asset: ${source}`));
+        };
+        image.src = source;
+      })),
+    );
+  }
+
+  get(key) {
+    return this.images.get(key) || null;
+  }
+}
+
+class SilentAssetStore {
+  async load() {}
+
+  get() {
+    return null;
+  }
+}
+
+class SilentAudioBank {
+  constructor(enabled = false) {
+    this.enabled = enabled;
+  }
+
+  async preload() {}
+
+  async unlock() {
+    return true;
+  }
+
+  toggle() {
+    this.enabled = !this.enabled;
+    return this.enabled;
+  }
+
+  setEnabled(enabled) {
+    this.enabled = enabled;
+  }
+
+  play() {
+    return null;
+  }
+
+  pause() {}
+
+  resume() {
+    return null;
+  }
+
+  setPlaybackRate() {}
+
+  stop() {}
+}
+
+class SilentMusicBank {
+  constructor(enabled = false) {
+    this.enabled = enabled;
+  }
+
+  async preload() {}
+
+  async unlock() {
+    return true;
+  }
+
+  toggle() {
+    this.enabled = !this.enabled;
+    return this.enabled;
+  }
+
+  setEnabled(enabled) {
+    this.enabled = enabled;
+  }
+
+  stopAll() {}
+
+  pauseAll() {}
+
+  resumeAll() {}
+
+  playLoop() {
+    return null;
+  }
+
+  stop() {}
+
+  isPlaying() {
+    return false;
+  }
+
+  currentTime() {
+    return 0;
+  }
+
+  setPlaybackRate() {}
+
+  playOneShot() {
+    return null;
+  }
+}
+
+class SilentProceduralSfxBank {
+  constructor(enabled = false) {
+    this.enabled = enabled;
+  }
+
+  async preload() {}
+
+  async unlock() {
+    return true;
+  }
+
+  setEnabled(enabled) {
+    this.enabled = enabled;
+  }
+
+  playLoop() {
+    return null;
+  }
+
+  pauseLoop() {}
+
+  stopLoop() {}
+
+  playPyoro2Shoot() {
+    return false;
+  }
+
+  playBuffer() {
+    return false;
+  }
+}
+
+class AudioBank {
+  constructor(manifest, enabled = false) {
+    this.manifest = manifest;
+    this.enabled = enabled;
+    this.sources = new Map();
+    this.activeInstances = new Set();
+    this.unlocked = false;
+  }
+
+  async preload(poolSize = 4) {
+    await Promise.all(
+      Object.entries(this.manifest).map(async ([name, source]) => {
+        const objectUrl = await fetchAudioObjectUrl(source);
+        const pool = await Promise.all(
+          Array.from({ length: poolSize }, () => createPreparedAudio(objectUrl)),
+        );
+        this.sources.set(name, {
+          objectUrl,
+          pool,
+          nextIndex: 0,
+        });
+      }),
+    );
+  }
+
+  setEnabled(enabled) {
+    this.enabled = enabled;
+    if (!enabled) {
+      for (const audio of this.activeInstances) {
+        audio.pause();
+        audio.currentTime = 0;
+      }
+      this.activeInstances.clear();
+    }
+  }
+
+  toggle() {
+    this.enabled = !this.enabled;
+    return this.enabled;
+  }
+
+  async unlock() {
+    if (this.unlocked || !this.sources.size) {
+      this.unlocked = true;
+      return true;
+    }
+
+    const entry = this.sources.values().next().value;
+    if (!entry || !entry.pool.length) {
+      this.unlocked = true;
+      return true;
+    }
+
+    try {
+      const probe = entry.pool[0];
+      const previousVolume = probe.volume;
+      probe.volume = 0;
+      await probe.play();
+      probe.pause();
+      probe.currentTime = 0;
+      probe.volume = previousVolume;
+      this.unlocked = true;
+      return true;
+    } catch (_error) {
+      return false;
+    }
+  }
+
+  play(name, options = {}) {
+    if (!this.enabled || !this.sources.has(name)) {
+      return null;
+    }
+
+    const entry = this.sources.get(name);
+    const available = entry.pool.find((audio) => audio.paused || audio.ended) || entry.pool[entry.nextIndex];
+    entry.nextIndex = (entry.nextIndex + 1) % entry.pool.length;
+
+    available.pause();
+    available.currentTime = 0;
+    available.volume = options.volume ?? 1;
+    available.playbackRate = options.playbackRate ?? 1;
+    available.loop = options.loop ?? false;
+    available.onended = () => {
+      this.activeInstances.delete(available);
+    };
+    available.onerror = () => {
+      this.activeInstances.delete(available);
+    };
+    this.activeInstances.add(available);
+    available.play().catch(() => {});
+    return available;
+  }
+
+  pause(audio) {
+    if (!audio) {
+      return;
+    }
+
+    audio.pause();
+  }
+
+  resume(audio, options = {}) {
+    if (!audio || !this.enabled) {
+      return null;
+    }
+
+    audio.volume = options.volume ?? audio.volume ?? 1;
+    audio.playbackRate = options.playbackRate ?? audio.playbackRate ?? 1;
+    audio.loop = options.loop ?? audio.loop ?? false;
+    this.activeInstances.add(audio);
+    audio.play().catch(() => {});
+    return audio;
+  }
+
+  setPlaybackRate(rate) {
+    for (const audio of this.activeInstances) {
+      audio.playbackRate = rate;
+    }
+  }
+
+  stop(audio) {
+    if (!audio) {
+      return;
+    }
+
+    audio.pause();
+    audio.currentTime = 0;
+    this.activeInstances.delete(audio);
+  }
+}
+
+class MusicBank {
+  constructor(manifest, enabled = false) {
+    this.manifest = manifest;
+    this.enabled = enabled;
+    this.tracks = new Map();
+    this.activeTracks = new Map();
+    this.oneShotInstances = new Set();
+    this.context = null;
+    this.masterGain = null;
+    this.unlocked = false;
+  }
+
+  ensureContext() {
+    if (this.context) {
+      return this.context;
+    }
+
+    const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+    if (!AudioContextClass) {
+      return null;
+    }
+
+    this.context = new AudioContextClass();
+    this.masterGain = this.context.createGain();
+    this.masterGain.gain.value = 1;
+    this.masterGain.connect(this.context.destination);
+    return this.context;
+  }
+
+  async preload() {
+    const context = this.ensureContext();
+    if (!context) {
+      return;
+    }
+
+    await Promise.all(
+      Object.entries(this.manifest).map(async ([name, source]) => {
+        const response = await fetch(source);
+        if (!response.ok) {
+          throw new Error(`Unable to load audio asset: ${source}`);
+        }
+
+        const encoded = await response.arrayBuffer();
+        const buffer = await context.decodeAudioData(encoded.slice(0));
+        this.tracks.set(name, {
+          buffer,
+          duration: buffer.duration,
+        });
+      }),
+    );
+  }
+
+  setEnabled(enabled) {
+    this.enabled = enabled;
+    if (!enabled) {
+      this.stopAll();
+    }
+  }
+
+  toggle() {
+    this.setEnabled(!this.enabled);
+    return this.enabled;
+  }
+
+  async unlock() {
+    const context = this.ensureContext();
+    if (this.unlocked || !context) {
+      this.unlocked = true;
+      return true;
+    }
+
+    try {
+      if (context.state === "suspended") {
+        await context.resume();
+      }
+      this.unlocked = true;
+      return true;
+    } catch (_error) {
+      return false;
+    }
+  }
+
+  normalizeOffset(name, offset = 0) {
+    const track = this.tracks.get(name);
+    if (!track || !track.duration) {
+      return 0;
+    }
+
+    if (!Number.isFinite(offset)) {
+      return 0;
+    }
+
+    const value = offset % track.duration;
+    return value < 0 ? value + track.duration : value;
+  }
+
+  syncTrackState(state, referenceTime = this.context?.currentTime ?? 0) {
+    if (!state || state.paused || !state.source) {
+      return state?.currentOffset ?? 0;
+    }
+
+    const elapsed = Math.max(0, referenceTime - state.lastContextTime);
+    if (elapsed > 0) {
+      state.currentOffset = this.normalizeOffset(
+        state.name,
+        state.currentOffset + elapsed * state.playbackRate,
+      );
+      state.lastContextTime = referenceTime;
+    }
+
+    return state.currentOffset;
+  }
+
+  destroyLoopSource(state) {
+    if (!state?.source) {
+      return;
+    }
+
+    const { source, gainNode } = state;
+    source.onended = null;
+    try {
+      source.stop();
+    } catch (_error) {
+      // Source may have already ended.
+    }
+    source.disconnect();
+    gainNode?.disconnect();
+    state.source = null;
+    state.gainNode = null;
+  }
+
+  startLoopSource(name, state) {
+    const context = this.ensureContext();
+    const track = this.tracks.get(name);
+    if (!context || !track || !this.masterGain) {
+      return null;
+    }
+
+    const source = context.createBufferSource();
+    const gainNode = context.createGain();
+
+    source.buffer = track.buffer;
+    source.loop = true;
+    source.loopStart = 0;
+    source.loopEnd = track.duration;
+    source.playbackRate.value = state.playbackRate;
+    gainNode.gain.value = state.volume;
+
+    source.connect(gainNode);
+    gainNode.connect(this.masterGain);
+
+    state.source = source;
+    state.gainNode = gainNode;
+    state.lastContextTime = context.currentTime;
+    state.paused = false;
+
+    source.start(context.currentTime, state.currentOffset);
+    return state;
+  }
+
+  stopAll() {
+    for (const state of this.activeTracks.values()) {
+      this.destroyLoopSource(state);
+    }
+    this.activeTracks.clear();
+    for (const instance of this.oneShotInstances) {
+      instance.source.onended = null;
+      try {
+        instance.source.stop();
+      } catch (_error) {
+        // Source may have already ended.
+      }
+      instance.source.disconnect();
+      instance.gainNode.disconnect();
+    }
+    this.oneShotInstances.clear();
+  }
+
+  pauseAll() {
+    for (const state of this.activeTracks.values()) {
+      if (state.paused) {
+        continue;
+      }
+
+      this.syncTrackState(state);
+      state.paused = true;
+      this.destroyLoopSource(state);
+    }
+  }
+
+  resumeAll() {
+    if (!this.enabled) {
+      return;
+    }
+
+    for (const [name, state] of this.activeTracks.entries()) {
+      if (!state.paused) {
+        continue;
+      }
+
+      this.startLoopSource(name, state);
+    }
+  }
+
+  playLoop(name, options = {}) {
+    if (!this.enabled || !this.tracks.has(name)) {
+      return null;
+    }
+
+    let state = this.activeTracks.get(name);
+    if (state) {
+      if (!state.paused) {
+        this.syncTrackState(state);
+      }
+
+      state.volume = options.volume ?? state.volume;
+      state.playbackRate = options.playbackRate ?? state.playbackRate;
+
+      if (options.startAt !== undefined) {
+        state.currentOffset = this.normalizeOffset(name, options.startAt);
+        this.destroyLoopSource(state);
+        return this.startLoopSource(name, state);
+      }
+
+      if (state.source) {
+        state.source.playbackRate.value = state.playbackRate;
+        if (state.gainNode) {
+          state.gainNode.gain.value = state.volume;
+        }
+        return state;
+      }
+
+      return this.startLoopSource(name, state);
+    }
+
+    state = {
+      name,
+      source: null,
+      gainNode: null,
+      currentOffset: this.normalizeOffset(name, options.startAt ?? 0),
+      lastContextTime: this.context?.currentTime ?? 0,
+      volume: options.volume ?? 0.35,
+      playbackRate: options.playbackRate ?? 1,
+      paused: false,
+    };
+    this.activeTracks.set(name, state);
+    return this.startLoopSource(name, state);
+  }
+
+  stop(name) {
+    const state = this.activeTracks.get(name);
+    if (!state) {
+      return;
+    }
+
+    this.destroyLoopSource(state);
+    this.activeTracks.delete(name);
+  }
+
+  isPlaying(name) {
+    const state = this.activeTracks.get(name);
+    return Boolean(state && !state.paused);
+  }
+
+  currentTime(name) {
+    const state = this.activeTracks.get(name);
+    if (!state) {
+      return 0;
+    }
+
+    return this.syncTrackState(state);
+  }
+
+  setPlaybackRate(rate) {
+    for (const state of this.activeTracks.values()) {
+      if (!state.paused) {
+        this.syncTrackState(state);
+      }
+      state.playbackRate = rate;
+      if (state.source) {
+        state.source.playbackRate.value = rate;
+      }
+    }
+  }
+
+  playOneShot(name, options = {}) {
+    if (!this.enabled || !this.tracks.has(name)) {
+      return null;
+    }
+
+    const context = this.ensureContext();
+    const track = this.tracks.get(name);
+    if (!context || !track || !this.masterGain) {
+      return null;
+    }
+
+    const source = context.createBufferSource();
+    const gainNode = context.createGain();
+    source.buffer = track.buffer;
+    source.loop = false;
+    source.playbackRate.value = options.playbackRate ?? 1;
+    gainNode.gain.value = options.volume ?? 0.35;
+    source.connect(gainNode);
+    gainNode.connect(this.masterGain);
+
+    const instance = { source, gainNode };
+    const cleanup = () => {
+      source.disconnect();
+      gainNode.disconnect();
+      this.oneShotInstances.delete(instance);
+    };
+    source.onended = cleanup;
+    this.oneShotInstances.add(instance);
+    source.start(
+      context.currentTime,
+      this.normalizeOffset(name, options.startAt ?? 0),
+    );
+    return instance;
+  }
+}
+
+class ProceduralSfxBank {
+  constructor(enabled = false) {
+    this.enabled = enabled;
+    this.context = null;
+    this.masterGain = null;
+    this.buffers = new Map();
+    this.loopStates = new Map();
+    this.unlocked = false;
+  }
+
+  ensureContext() {
+    if (this.context) {
+      return this.context;
+    }
+
+    const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+    if (!AudioContextClass) {
+      return null;
+    }
+
+    this.context = new AudioContextClass();
+    this.masterGain = this.context.createGain();
+    this.masterGain.gain.value = this.enabled ? 0.18 : 0;
+    this.masterGain.connect(this.context.destination);
+    return this.context;
+  }
+
+  setEnabled(enabled) {
+    this.enabled = enabled;
+    if (this.masterGain) {
+      this.masterGain.gain.value = enabled ? 0.18 : 0;
+    }
+  }
+
+  async unlock() {
+    const context = this.ensureContext();
+    if (!context) {
+      this.unlocked = true;
+      return true;
+    }
+
+    if (context.state === "suspended") {
+      try {
+        await context.resume();
+      } catch (_error) {
+        return false;
+      }
+    }
+
+    this.unlocked = true;
+    return true;
+  }
+
+  async preload(manifest = {}) {
+    const context = this.ensureContext();
+    if (!context) {
+      return;
+    }
+
+    await Promise.all(
+      Object.entries(manifest).map(async ([name, source]) => {
+        const response = await fetch(source);
+        if (!response.ok) {
+          throw new Error(`Unable to load audio asset: ${source}`);
+        }
+
+        const encoded = await response.arrayBuffer();
+        const buffer = await context.decodeAudioData(encoded.slice(0));
+        this.buffers.set(name, buffer);
+      }),
+    );
+  }
+
+  normalizeOffset(name, offset = 0) {
+    const buffer = this.buffers.get(name);
+    if (!buffer || !buffer.duration || !Number.isFinite(offset)) {
+      return 0;
+    }
+
+    const value = offset % buffer.duration;
+    return value < 0 ? value + buffer.duration : value;
+  }
+
+  syncLoopState(state, referenceTime = this.context?.currentTime ?? 0) {
+    if (!state || state.paused || !state.source) {
+      return state?.currentOffset ?? 0;
+    }
+
+    const elapsed = Math.max(0, referenceTime - state.lastContextTime);
+    if (elapsed > 0) {
+      state.currentOffset = this.normalizeOffset(
+        state.name,
+        state.currentOffset + elapsed * state.playbackRate,
+      );
+      state.lastContextTime = referenceTime;
+    }
+
+    return state.currentOffset;
+  }
+
+  destroyLoopSource(state) {
+    if (!state?.source) {
+      return;
+    }
+
+    const { source, gainNode } = state;
+    source.onended = null;
+    try {
+      source.stop();
+    } catch (_error) {
+      // Source may already be stopped.
+    }
+    source.disconnect();
+    gainNode?.disconnect();
+    state.source = null;
+    state.gainNode = null;
+  }
+
+  startLoopSource(name, state) {
+    const context = this.ensureContext();
+    const buffer = this.buffers.get(name);
+    if (!context || !buffer || !this.masterGain) {
+      return null;
+    }
+
+    const source = context.createBufferSource();
+    const gainNode = context.createGain();
+    source.buffer = buffer;
+    source.loop = true;
+    source.loopStart = 0;
+    source.loopEnd = buffer.duration;
+    source.playbackRate.value = state.playbackRate;
+    gainNode.gain.value = state.gain;
+    source.connect(gainNode);
+    gainNode.connect(this.masterGain);
+
+    state.source = source;
+    state.gainNode = gainNode;
+    state.lastContextTime = context.currentTime;
+    state.paused = false;
+
+    source.start(context.currentTime, state.currentOffset);
+    return state;
+  }
+
+  playPyoro2Shoot(playbackRate = 1) {
+    if (!this.enabled) {
+      return false;
+    }
+
+    const context = this.ensureContext();
+    if (!context || !this.masterGain) {
+      return false;
+    }
+
+    const schedule = () => {
+      const now = context.currentTime;
+      const tone = context.createOscillator();
+      const toneGain = context.createGain();
+      const chirp = context.createOscillator();
+      const chirpGain = context.createGain();
+      const rate = clamp(playbackRate, 0.8, 2);
+
+      tone.type = "square";
+      tone.frequency.setValueAtTime(920 * rate, now);
+      tone.frequency.exponentialRampToValueAtTime(460 * rate, now + 0.085);
+      toneGain.gain.setValueAtTime(0.0001, now);
+      toneGain.gain.exponentialRampToValueAtTime(0.045, now + 0.004);
+      toneGain.gain.exponentialRampToValueAtTime(0.0001, now + 0.085);
+      tone.connect(toneGain);
+      toneGain.connect(this.masterGain);
+
+      chirp.type = "triangle";
+      chirp.frequency.setValueAtTime(1380 * rate, now);
+      chirp.frequency.exponentialRampToValueAtTime(720 * rate, now + 0.045);
+      chirpGain.gain.setValueAtTime(0.0001, now);
+      chirpGain.gain.exponentialRampToValueAtTime(0.015, now + 0.002);
+      chirpGain.gain.exponentialRampToValueAtTime(0.0001, now + 0.045);
+      chirp.connect(chirpGain);
+      chirpGain.connect(this.masterGain);
+
+      const cleanup = () => {
+        tone.disconnect();
+        toneGain.disconnect();
+        chirp.disconnect();
+        chirpGain.disconnect();
+      };
+
+      chirp.onended = cleanup;
+      tone.start(now);
+      chirp.start(now);
+      chirp.stop(now + 0.05);
+      tone.stop(now + 0.09);
+    };
+
+    if (context.state === "running") {
+      schedule();
+      return true;
+    }
+
+    context.resume().then(schedule).catch(() => {});
+    return true;
+  }
+
+  playBuffer(name, options = {}) {
+    if (!this.enabled) {
+      return false;
+    }
+
+    const context = this.ensureContext();
+    const buffer = this.buffers.get(name);
+    if (!context || !buffer || !this.masterGain) {
+      return false;
+    }
+
+    const schedule = () => {
+      const source = context.createBufferSource();
+      const gain = context.createGain();
+
+      source.buffer = buffer;
+      source.playbackRate.value = options.playbackRate ?? 1;
+      gain.gain.value = options.gain ?? 1;
+
+      source.connect(gain);
+      gain.connect(this.masterGain);
+      source.onended = () => {
+        source.disconnect();
+        gain.disconnect();
+      };
+      source.start();
+    };
+
+    if (context.state === "running") {
+      schedule();
+      return true;
+    }
+
+    context.resume().then(schedule).catch(() => {});
+    return true;
+  }
+
+  playLoop(name, options = {}) {
+    if (!this.enabled) {
+      return null;
+    }
+
+    const buffer = this.buffers.get(name);
+    if (!buffer) {
+      return null;
+    }
+
+    let state = this.loopStates.get(name);
+    if (state) {
+      if (!state.paused) {
+        this.syncLoopState(state);
+      }
+
+      state.gain = options.gain ?? state.gain;
+      state.playbackRate = options.playbackRate ?? state.playbackRate;
+
+      if (state.source) {
+        state.source.playbackRate.value = state.playbackRate;
+        if (state.gainNode) {
+          state.gainNode.gain.value = state.gain;
+        }
+        return state;
+      }
+
+      return this.startLoopSource(name, state);
+    }
+
+    state = {
+      name,
+      source: null,
+      gainNode: null,
+      currentOffset: this.normalizeOffset(name, options.startAt ?? 0),
+      lastContextTime: this.context?.currentTime ?? 0,
+      gain: options.gain ?? 1,
+      playbackRate: options.playbackRate ?? 1,
+      paused: false,
+    };
+    this.loopStates.set(name, state);
+    return this.startLoopSource(name, state);
+  }
+
+  pauseLoop(name) {
+    const state = this.loopStates.get(name);
+    if (!state || state.paused) {
+      return;
+    }
+
+    this.syncLoopState(state);
+    state.paused = true;
+    this.destroyLoopSource(state);
+  }
+
+  stopLoop(name) {
+    const state = this.loopStates.get(name);
+    if (!state) {
+      return;
+    }
+
+    this.destroyLoopSource(state);
+    this.loopStates.delete(name);
+  }
+}
+
+class Scheduler {
+  constructor() {
+    this.events = [];
+  }
+
+  clear() {
+    this.events = [];
+  }
+
+  schedule(delay, callback) {
+    const event = {
+      remaining: delay,
+      callback,
+      cancelled: false,
+    };
+
+    this.events.push(event);
+    return event;
+  }
+
+  cancel(event) {
+    if (event) {
+      event.cancelled = true;
+    }
+  }
+
+  update(deltaTime) {
+    const activeEvents = this.events;
+    this.events = [];
+
+    for (const event of activeEvents) {
+      if (event.cancelled) {
+        continue;
+      }
+
+      event.remaining -= deltaTime;
+      if (event.remaining <= 0) {
+        event.callback();
+      } else {
+        this.events.push(event);
+      }
+    }
+  }
+}
+
+class Entity {
+  constructor(game, x, y, width, height) {
+    this.game = game;
+    this.x = x;
+    this.y = y;
+    this.width = width;
+    this.height = height;
+    this.removed = false;
+  }
+
+  get left() {
+    return this.x - this.width / 2;
+  }
+
+  get right() {
+    return this.x + this.width / 2;
+  }
+
+  get top() {
+    return this.y - this.height / 2;
+  }
+
+  get bottom() {
+    return this.y + this.height / 2;
+  }
+
+  intersects(other) {
+    return (
+      other.right > this.left &&
+      other.left < this.right &&
+      other.bottom > this.top &&
+      other.top < this.bottom
+    );
+  }
+
+  isOutOfBounds(included = true) {
+    const { worldWidth, worldHeight } = CONFIG;
+
+    if (included) {
+      return (
+        this.right <= 0 ||
+        this.left >= worldWidth ||
+        this.bottom <= 0 ||
+        this.top >= worldHeight
+      );
+    }
+
+    return (
+      this.left <= 0 ||
+      this.right >= worldWidth ||
+      this.top <= 0 ||
+      this.bottom >= worldHeight
+    );
+  }
+
+  hitsFloor() {
+    return this.bottom >= CONFIG.worldHeight - 1;
+  }
+
+  remove() {
+    this.removed = true;
+  }
+}
+
+class Leaf extends Entity {
+  constructor(game, x, y, speed, variant, velocity = 0) {
+    super(game, x, y, 0.75, 0.75);
+    this.variant = variant;
+    this.speed = speed;
+    this.velocity = velocity;
+    this.spriteTimer = 0;
+    this.spriteFrame = 0;
+  }
+
+  update(deltaTime) {
+    this.spriteTimer += deltaTime;
+    while (this.spriteTimer >= CONFIG.leafSpriteDuration) {
+      this.spriteTimer -= CONFIG.leafSpriteDuration;
+      this.spriteFrame = (this.spriteFrame + 1) % 3;
+    }
+
+    this.x += this.velocity * deltaTime;
+    this.y += (CONFIG.leafSpeed - Math.abs(this.velocity)) * this.speed * deltaTime;
+
+    if (this.velocity > 0) {
+      this.velocity = Math.max(0, this.velocity - CONFIG.airResistance * deltaTime);
+    } else if (this.velocity < 0) {
+      this.velocity = Math.min(0, this.velocity + CONFIG.airResistance * deltaTime);
+    }
+
+    if (this.isOutOfBounds()) {
+      this.remove();
+    }
+  }
+
+  setLeftWind() {
+    this.velocity = -CONFIG.leafWindSpeed;
+  }
+
+  setRightWind() {
+    this.velocity = CONFIG.leafWindSpeed;
+  }
+
+  cut() {
+    if (Math.floor(this.game.randomRange(0, 3)) !== 0) {
+      return;
+    }
+
+    for (const deltaPosition of [-this.width, this.width]) {
+      this.game.leaves.push(
+        new LeafPiece(
+          this.game,
+          this.x + deltaPosition / 2,
+          this.y,
+          this.speed,
+          this.variant,
+          this.velocity / 2,
+        ),
+      );
+    }
+
+    this.remove();
+  }
+
+  spriteKey(style) {
+    return `leaf_${this.variant}_${style}_${this.spriteFrame}`;
+  }
+
+  draw(context) {
+    const image = this.game.assets.get(this.spriteKey(this.game.styleType()));
+    if (!image) {
+      return;
+    }
+
+    this.game.drawCenteredImage(context, image, this.x, this.y, this.width, this.height);
+  }
+}
+
+class LeafPiece extends Leaf {
+  spriteKey(style) {
+    return `leafpiece_${this.variant}_${style}_${this.spriteFrame}`;
+  }
+
+  cut() {}
+}
+
+class Bean extends Entity {
+  constructor(game, type, x, y, speedMultiplier) {
+    super(game, x, y, 1.5, 1.5);
+    this.type = type;
+    this.speedMultiplier = speedMultiplier;
+    this.caught = false;
+    this.spriteTimer = 0;
+    this.spriteFrame = 0;
+    this.superFrame = 0;
+    this.superColorFrame = 0;
+  }
+
+  update(deltaTime) {
+    this.advanceAnimation(deltaTime);
+
+    if (this.caught || this.removed) {
+      return;
+    }
+
+    this.y += CONFIG.beanSpeed * this.speedMultiplier * deltaTime;
+
+    if (this.hitsFloor()) {
+      const tileIndex = clamp(Math.floor(this.x), 0, CONFIG.worldWidth - 1);
+      const tile = this.game.cases[tileIndex];
+
+      if (tile.exists) {
+        tile.exists = false;
+        this.game.playSound("bean_explode");
+        this.game.spawnSmoke(this.x, this.y);
+        this.remove();
+        return;
+      }
+    }
+
+    if (!this.game.pyoro.dead && this.intersects(this.game.pyoro)) {
+      this.game.playSound("bean_explode");
+      this.game.spawnSmoke(this.x, this.y);
+      this.remove();
+      this.game.pyoro.die();
+      return;
+    }
+
+    if (this.isOutOfBounds()) {
+      this.remove();
+    }
+  }
+
+  advanceAnimation(deltaTime) {
+    this.spriteTimer += deltaTime;
+
+    if (this.type === "super") {
+      const step = CONFIG.beanSpriteDuration / 6;
+      while (this.spriteTimer >= step) {
+        this.spriteTimer -= step;
+        this.superColorFrame = (this.superColorFrame + 1) % 6;
+        if (this.superColorFrame % 2 === 0) {
+          this.superFrame = (this.superFrame + 1) % 3;
+        }
+      }
+      return;
+    }
+
+    while (this.spriteTimer >= CONFIG.beanSpriteDuration) {
+      this.spriteTimer -= CONFIG.beanSpriteDuration;
+      this.spriteFrame = (this.spriteFrame + 1) % 3;
+    }
+  }
+
+  catch() {
+    if (this.caught || this.removed) {
+      return;
+    }
+
+    this.caught = true;
+
+    if (this.type === "pink") {
+      this.game.repairCase();
+    } else if (this.type === "super") {
+      this.game.triggerSuperBean(this);
+    }
+  }
+
+  cut(options = {}) {
+    const soundName = Object.prototype.hasOwnProperty.call(options, "soundName")
+      ? options.soundName
+      : "bean_cut";
+    if (soundName) {
+      this.game.playSound(soundName);
+    }
+    this.game.spawnLeaf(this.type, this.x, this.y);
+    this.game.spawnLeaf(this.type, this.x, this.y);
+  }
+
+  spriteKey(style) {
+    if (this.type === "super") {
+      return `super_bean_${this.superFrame}_${this.superColorFrame}`;
+    }
+
+    if (this.type === "pink") {
+      return `pink_bean_${style}_${this.spriteFrame}`;
+    }
+
+    return `bean_${style}_${this.spriteFrame}`;
+  }
+
+  draw(context) {
+    const image = this.game.assets.get(this.spriteKey(this.game.styleType()));
+    if (!image) {
+      return;
+    }
+
+    this.game.drawCenteredImage(context, image, this.x, this.y, this.width, this.height);
+  }
+}
+
+class Angel extends Entity {
+  constructor(game, tileIndex) {
+    super(game, tileIndex + 0.75, 0.75, 1.5, 1.5);
+    this.tileIndex = tileIndex;
+    this.spriteFrame = 0;
+    this.spriteTimer = 0;
+    this.sound = this.game.playSound("angel_down");
+  }
+
+  update(deltaTime) {
+    this.spriteTimer += deltaTime;
+    while (this.spriteTimer >= CONFIG.angelSpriteDuration) {
+      this.spriteTimer -= CONFIG.angelSpriteDuration;
+      this.spriteFrame = this.spriteFrame === 0 ? 1 : 0;
+    }
+
+    const tile = this.game.cases[this.tileIndex];
+    this.y += tile.isRepairing ? CONFIG.angelSpeed * deltaTime : -CONFIG.angelSpeed * deltaTime;
+
+    if (tile.isRepairing && this.hitsFloor()) {
+      tile.isRepairing = false;
+      tile.exists = true;
+
+      if (this.sound) {
+        this.game.audio.stop(this.sound);
+        this.sound = null;
+      }
+    }
+
+    if (this.isOutOfBounds()) {
+      this.remove();
+    }
+  }
+
+  spriteKey(style) {
+    return `angel_${style}_${this.spriteFrame}`;
+  }
+
+  draw(context) {
+    const image = this.game.assets.get(this.spriteKey(this.game.styleType()));
+    if (!image) {
+      return;
+    }
+
+    this.game.drawCenteredImage(context, image, this.x, this.y, this.width, this.height);
+  }
+}
+
+class Smoke extends Entity {
+  constructor(game, x, y) {
+    super(game, x, y, 1.5, 1.5);
+    this.age = 0;
+  }
+
+  update(deltaTime) {
+    this.age += deltaTime;
+    if (this.age >= CONFIG.smokeSpriteDuration * 3) {
+      this.remove();
+    }
+  }
+
+  spriteKey(style) {
+    const frame = clamp(Math.floor(this.age / CONFIG.smokeSpriteDuration), 0, 2);
+    return `smoke_${style}_${frame}`;
+  }
+
+  draw(context) {
+    const image = this.game.assets.get(this.spriteKey(this.game.styleType()));
+    if (!image) {
+      return;
+    }
+
+    this.game.drawCenteredImage(context, image, this.x, this.y, this.width, this.height);
+  }
+}
+
+class ScorePopup {
+  constructor(game, x, y, value) {
+    this.game = game;
+    this.x = x;
+    this.y = y;
+    this.value = value;
+    this.age = 0;
+    this.blinkTimer = 0;
+    this.removed = false;
+    this.highlight = true;
+  }
+
+  update(deltaTime) {
+    this.age += deltaTime;
+    this.blinkTimer += deltaTime;
+    this.y -= 0.35 * deltaTime;
+
+    if (this.value >= 300) {
+      while (this.blinkTimer >= CONFIG.scorePopupBlinkDuration) {
+        this.blinkTimer -= CONFIG.scorePopupBlinkDuration;
+        this.highlight = !this.highlight;
+      }
+    }
+
+    if (this.age >= CONFIG.scorePopupLife) {
+      this.removed = true;
+    }
+  }
+
+  draw(context) {
+    const size = Math.round(CONFIG.unit * 0.75);
+
+    context.save();
+    context.textAlign = "center";
+    context.textBaseline = "middle";
+    context.font = `${size}px "Pyoro UI", monospace`;
+    context.lineWidth = 6;
+    context.strokeStyle = "rgba(0, 0, 0, 0.65)";
+    context.fillStyle = this.highlight ? "#ffd54a" : "#fff8b8";
+    context.strokeText(String(this.value), this.x * CONFIG.unit, this.y * CONFIG.unit);
+    context.fillText(String(this.value), this.x * CONFIG.unit, this.y * CONFIG.unit);
+    context.restore();
+  }
+}
+
+class Seed extends Entity {
+  constructor(game, angle, direction) {
+    const player = game.pyoro;
+    const radians = (angle * Math.PI) / 180;
+    const x = player.x + (player.width / 2 + 0.0625) * direction;
+    const y = player.y - player.height / 2 + 0.0625;
+
+    super(game, x, y, 0.125, 0.125);
+    this.direction = direction;
+    this.alpha = 255;
+    this.velocity = {
+      x: Math.cos(radians) * direction * CONFIG.seedSpeed,
+      y: -Math.sin(radians) * CONFIG.seedSpeed,
+    };
+  }
+
+  update(deltaTime) {
+    this.velocity.x -= CONFIG.airResistance * this.direction * deltaTime;
+    this.velocity.y += CONFIG.gravityForce * deltaTime;
+
+    this.x += this.velocity.x * deltaTime;
+    this.y += this.velocity.y * deltaTime;
+    this.alpha -= 64 * deltaTime;
+
+    if (this.alpha <= 0 || this.isOutOfBounds()) {
+      this.remove();
+    }
+  }
+
+  draw(context) {
+    const image = this.game.assets.get(`seed_${this.game.styleType()}`);
+    if (!image) {
+      return;
+    }
+
+    context.save();
+    context.globalAlpha = clamp(this.alpha / 255, 0, 1);
+    this.game.drawCenteredImage(context, image, this.x, this.y, this.width, this.height);
+    context.restore();
+  }
+}
+
+class Tongue extends Entity {
+  constructor(game, direction) {
+    const player = game.pyoro;
+    const x = player.x + (player.width / 2 + 0.6) * direction;
+    const y = player.y - player.height / 2 + 0.6;
+
+    super(game, x, y, 1.2, 1.2);
+    this.direction = direction;
+    this.caughtBean = null;
+    this.goBack = false;
+    this.sound = this.game.playSound("tongue");
+  }
+
+  update(deltaTime) {
+    if (this.goBack) {
+      this.x -= CONFIG.tongueSpeed * 2 * this.direction * deltaTime;
+      this.y += CONFIG.tongueSpeed * 2 * deltaTime;
+
+      if (this.caughtBean && !this.caughtBean.removed) {
+        this.caughtBean.x = this.x;
+        this.caughtBean.y = this.y;
+      }
+
+      if (this.y >= this.game.pyoro.y) {
+        if (this.caughtBean && !this.caughtBean.removed) {
+          this.game.playSound("pyoro_eat");
+          this.game.pyoro.startEating();
+        }
+        this.remove();
+      }
+      return;
+    }
+
+    this.x += CONFIG.tongueSpeed * this.direction * deltaTime;
+    this.y -= CONFIG.tongueSpeed * deltaTime;
+
+    for (const bean of this.game.beans) {
+      if (bean.removed || bean.caught) {
+        continue;
+      }
+
+      if (this.intersects(bean)) {
+        bean.catch();
+        this.game.audio.stop(this.sound);
+        this.sound = null;
+        this.caughtBean = bean;
+        this.goBack = true;
+        this.game.addScore(this.game.scoreForHeight(this.y), this.x, this.y);
+        return;
+      }
+    }
+
+    if (this.isOutOfBounds(false)) {
+      this.goBack = true;
+    }
+  }
+
+  draw(context) {
+    const image = this.game.assets.get(`tongue_${this.game.styleType()}_${this.direction}`);
+    if (!image) {
+      return;
+    }
+
+    this.game.drawCenteredImage(context, image, this.x, this.y, this.width, this.height);
+  }
+
+  remove() {
+    this.game.audio.stop(this.sound);
+    this.sound = null;
+
+    if (this.caughtBean && !this.caughtBean.removed) {
+      this.caughtBean.remove();
+    }
+
+    if (this.game.pyoro.tongue === this) {
+      this.game.pyoro.tongue = null;
+    }
+
+    super.remove();
+  }
+}
+
+class PlayerBase extends Entity {
+  constructor(game) {
+    super(game, 2, CONFIG.worldHeight - 2, 2, 2);
+    this.direction = 1;
+    this.moving = false;
+    this.dead = false;
+    this.notch = false;
+    this.notchTransition = null;
+    this.moveSound = null;
+    this.movementSoundSuppressed = false;
+  }
+
+  canStartMoving() {
+    return !this.dead;
+  }
+
+  onMoveEnabled() {}
+
+  enableMoveLeft() {
+    if (!this.canStartMoving()) {
+      return;
+    }
+
+    this.onMoveEnabled();
+    this.direction = -1;
+    this.moving = true;
+    this.movementSoundSuppressed = false;
+    this.syncMovementAudio(true);
+  }
+
+  enableMoveRight() {
+    if (!this.canStartMoving()) {
+      return;
+    }
+
+    this.onMoveEnabled();
+    this.direction = 1;
+    this.moving = true;
+    this.movementSoundSuppressed = false;
+    this.syncMovementAudio(true);
+  }
+
+  disableMove() {
+    this.moving = false;
+    this.notch = false;
+    this.notchTransition = null;
+    this.pauseMovementAudio();
+  }
+
+  updateMovementState(deltaTime, canMove = true) {
+    if (!this.moving) {
+      this.disableMove();
+      return;
+    }
+
+    if (canMove && !this.notch) {
+      this.move(deltaTime, this.direction);
+      if (!this.notchTransition) {
+        this.notchTransition = {
+          type: "enable",
+          remaining: CONFIG.pyoroNotchDuration,
+        };
+      }
+    }
+
+    this.updateNotchTransition(deltaTime);
+    this.syncMovementAudio(canMove);
+  }
+
+  syncMovementAudio(canMove = true) {
+    const shouldPlay = this.game.audio.enabled
+      && this.moving
+      && !this.dead
+      && canMove
+      && !this.movementSoundSuppressed;
+
+    if (!shouldPlay) {
+      this.pauseMovementAudio();
+      return;
+    }
+
+    if (!this.moveSound) {
+      this.moveSound = "pyoro_move";
+    }
+
+    this.game.proceduralSfx.playLoop(this.moveSound, {
+      gain: 1,
+      playbackRate: this.game.musicPlaybackRate,
+    });
+  }
+
+  pauseMovementAudio() {
+    if (!this.moveSound) {
+      return;
+    }
+
+    this.game.proceduralSfx.pauseLoop(this.moveSound);
+  }
+
+  stopMovementAudio() {
+    if (!this.moveSound) {
+      return;
+    }
+
+    this.game.proceduralSfx.stopLoop(this.moveSound);
+    this.moveSound = null;
+  }
+
+  updateNotchTransition(deltaTime) {
+    if (!this.notchTransition) {
+      return;
+    }
+
+    const transition = this.notchTransition;
+    transition.remaining -= deltaTime;
+    if (transition.remaining > 0) {
+      return;
+    }
+
+    if (transition.type === "enable") {
+      this.notch = true;
+      this.notchTransition = {
+        type: "disable",
+        remaining: CONFIG.pyoroNotchDuration,
+      };
+      return;
+    }
+
+    this.notch = false;
+    this.notchTransition = null;
+  }
+
+  move(deltaTime, direction) {
+    const amount = CONFIG.pyoroSpeed * deltaTime;
+
+    if (direction === 1) {
+      const target = this.x + this.width / 2 + amount;
+      const voidTile = this.voidTileOnPath(target);
+
+      if (target >= CONFIG.worldWidth) {
+        this.x = CONFIG.worldWidth - this.width / 2;
+      } else if (voidTile !== null) {
+        this.x = voidTile - this.width / 2;
+      } else {
+        this.x += amount;
+      }
+      return;
+    }
+
+    const target = this.x - this.width / 2 - amount;
+    const voidTile = this.voidTileOnPath(target);
+
+    if (target < 0) {
+      this.x = this.width / 2;
+    } else if (voidTile !== null) {
+      this.x = voidTile + this.width / 2 + 1;
+    } else {
+      this.x -= amount;
+    }
+  }
+
+  voidTileOnPath(targetPosition) {
+    if (this.x < targetPosition) {
+      const oldPosition = Math.floor(this.x + this.width / 2);
+      const target = Math.min(Math.floor(targetPosition), this.game.cases.length - 1);
+
+      for (let index = oldPosition; index <= target; index += 1) {
+        if (!this.game.cases[index].exists) {
+          return index;
+        }
+      }
+
+      return null;
+    }
+
+    const oldPosition = Math.floor(this.x - this.width / 2 - 1);
+    const target = Math.max(Math.floor(targetPosition), 0);
+
+    for (let index = oldPosition; index >= target; index -= 1) {
+      if (!this.game.cases[index].exists) {
+        return index;
+      }
+    }
+
+    return null;
+  }
+
+  die() {
+    if (this.dead) {
+      return;
+    }
+
+    this.dead = true;
+    this.disableMove();
+    this.stopMovementAudio();
+    this.game.musicPlaybackRate = 1;
+    this.game.audio.setPlaybackRate(1);
+    this.game.music.setPlaybackRate(1);
+    this.game.input.left = false;
+    this.game.input.right = false;
+    this.game.input.action = false;
+    this.game.playSound("pyoro_die");
+    this.game.scheduler.schedule(1.28, () => {
+      this.game.finishRun();
+    });
+  }
+
+  updateDeath(deltaTime) {
+    if (this.top < CONFIG.worldWidth) {
+      this.y += CONFIG.pyoroDieSpeed * deltaTime;
+    }
+  }
+
+  draw(context) {
+    const image = this.game.assets.get(this.spriteKey(this.game.styleType()));
+    if (!image) {
+      return;
+    }
+
+    this.game.drawCenteredImage(context, image, this.x, this.y, this.width, this.height);
+  }
+}
+
+class ClassicPyoro extends PlayerBase {
+  constructor(game) {
+    super(game);
+    this.tongue = null;
+    this.eatingTicks = 0;
+    this.eatingAccumulator = 0;
+    this.eatingOpen = false;
+  }
+
+  update(deltaTime) {
+    if (this.dead) {
+      this.updateDeath(deltaTime);
+      return;
+    }
+
+    this.updateEating(deltaTime);
+    this.updateMovementState(deltaTime, !this.tongue);
+  }
+
+  canStartMoving() {
+    return !this.dead && !this.tongue;
+  }
+
+  shoot() {
+    if (this.dead) {
+      return;
+    }
+
+    this.movementSoundSuppressed = true;
+    this.pauseMovementAudio();
+    if (this.tongue) {
+      this.tongue.remove();
+    }
+
+    this.tongue = new Tongue(this.game, this.direction);
+  }
+
+  recallAbility() {
+    if (!this.dead && this.tongue) {
+      this.tongue.goBack = true;
+    }
+  }
+
+  startEating() {
+    this.eatingTicks = 8;
+    this.eatingAccumulator = 0;
+    this.eatingOpen = true;
+  }
+
+  updateEating(deltaTime) {
+    if (this.eatingTicks <= 0) {
+      this.eatingOpen = false;
+      return;
+    }
+
+    this.eatingAccumulator += deltaTime;
+    while (this.eatingAccumulator >= CONFIG.pyoroEatingDuration && this.eatingTicks > 0) {
+      this.eatingAccumulator -= CONFIG.pyoroEatingDuration;
+      this.eatingTicks -= 1;
+
+      if (this.eatingTicks > 0) {
+        this.eatingOpen = !this.eatingOpen;
+      } else {
+        this.eatingOpen = false;
+      }
+    }
+  }
+
+  die() {
+    if (this.tongue) {
+      this.tongue.remove();
+    }
+
+    super.die();
+  }
+
+  spriteKey(style) {
+    if (this.dead) {
+      return `pyoro_${style}_die_${this.direction}`;
+    }
+
+    if (this.tongue) {
+      return `pyoro_${style}_eat_1_${this.direction}`;
+    }
+
+    if (this.notch) {
+      return `pyoro_${style}_jump_${this.direction}`;
+    }
+
+    if (this.eatingTicks > 0 && this.eatingOpen) {
+      return `pyoro_${style}_eat_0_${this.direction}`;
+    }
+
+    return `pyoro_${style}_normal_${this.direction}`;
+  }
+}
+
+class Pyoro2 extends PlayerBase {
+  constructor(game) {
+    super(game);
+    this.shootFrame = 0;
+    this.shootAccumulator = 0;
+  }
+
+  update(deltaTime) {
+    if (this.dead) {
+      this.updateDeath(deltaTime);
+      return;
+    }
+
+    this.updateShootAnimation(deltaTime);
+    this.updateMovementState(deltaTime);
+  }
+
+  onMoveEnabled() {
+    if (this.shootFrame > 0) {
+      this.shootFrame = 0;
+      this.shootAccumulator = 0;
+    }
+  }
+
+  updateShootAnimation(deltaTime) {
+    if (this.shootFrame <= 0) {
+      return;
+    }
+
+    this.shootAccumulator += deltaTime;
+    while (this.shootAccumulator >= CONFIG.pyoro2ShootDuration && this.shootFrame > 0) {
+      this.shootAccumulator -= CONFIG.pyoro2ShootDuration;
+      this.shootFrame += 1;
+      if (this.shootFrame > 4) {
+        this.shootFrame = 0;
+      }
+    }
+  }
+
+  shoot() {
+    if (this.dead) {
+      return;
+    }
+
+    this.game.playPyoro2Shoot();
+    this.shootFrame = 1;
+    this.shootAccumulator = 0;
+
+    const hits = [];
+
+    for (const bean of this.game.beans) {
+      if (bean.removed || bean.caught) {
+        continue;
+      }
+
+      if (this.isShootingEntity(bean)) {
+        bean.cut();
+        bean.catch();
+        bean.remove();
+        hits.push({ x: bean.x, y: bean.y });
+      }
+    }
+
+    for (const leaf of this.game.leaves) {
+      if (leaf.removed) {
+        continue;
+      }
+
+      if (this.isShootingEntity(leaf)) {
+        leaf.cut();
+        if (this.direction === 1) {
+          leaf.setRightWind();
+        } else {
+          leaf.setLeftWind();
+        }
+      }
+    }
+
+    const score = this.game.comboScore(hits.length);
+    for (const hit of hits) {
+      this.game.addScore(score, hit.x, hit.y);
+    }
+
+    this.game.spawnSeeds(this.direction);
+  }
+
+  recallAbility() {}
+
+  isShootingEntity(entity) {
+    const distance = this.direction === 1 ? entity.x - this.x : this.x - entity.x;
+
+    return (
+      this.y - entity.y + entity.height >= distance - entity.width &&
+      this.y - entity.y - entity.height <= distance + entity.width
+    );
+  }
+
+  spriteKey(style) {
+    if (this.dead) {
+      return `pyoro2_${style}_die_${this.direction}`;
+    }
+
+    if (this.shootFrame > 0) {
+      return `pyoro2_${style}_shoot_${this.shootFrame - 1}_${this.direction}`;
+    }
+
+    if (this.notch) {
+      return `pyoro2_${style}_jump_${this.direction}`;
+    }
+
+    return `pyoro2_${style}_normal_${this.direction}`;
+  }
+}
+
+class PyoroWebGame {
+  constructor(options = {}) {
+    this.headless = Boolean(options.headless || typeof document === "undefined");
+    this.fixedStep = options.fixedStep ?? 1 / 60;
+    this.maxSubSteps = options.maxSubSteps ?? 5;
+    this.frameAccumulator = 0;
+    this.seed = normalizeSeed(options.seed);
+    this.rng = createSeededRandom(this.seed);
+
+    this.canvas = this.headless
+      ? { width: CONFIG.worldWidth * CONFIG.unit, height: CONFIG.worldHeight * CONFIG.unit }
+      : document.getElementById("gameCanvas");
+    this.context = this.headless ? null : this.canvas.getContext("2d");
+    if (this.context) {
+      this.context.imageSmoothingEnabled = false;
+    }
+
+    this.overlay = this.headless ? createStubElement() : document.getElementById("overlay");
+    this.overlayTitle = this.headless ? createStubElement() : document.getElementById("overlayTitle");
+    this.overlayMessage = this.headless ? createStubElement() : document.getElementById("overlayMessage");
+    this.overlayButton = this.headless ? createStubElement() : document.getElementById("overlayButton");
+    this.canvasFrame = this.headless ? createStubElement() : document.querySelector(".canvas-frame");
+
+    this.startButton = this.headless ? createStubElement() : document.getElementById("startButton");
+    this.pauseButton = this.headless ? createStubElement() : document.getElementById("pauseButton");
+    this.aiButton = this.headless ? createStubElement() : document.getElementById("aiButton");
+    this.muteButton = this.headless ? createStubElement() : document.getElementById("muteButton");
+    this.musicButton = this.headless ? createStubElement() : document.getElementById("musicButton");
+    this.fullscreenButton = this.headless ? createStubElement() : document.getElementById("fullscreenButton");
+    this.stretchButton = this.headless ? createStubElement() : document.getElementById("stretchButton");
+    this.modeClassicButton = this.headless ? createStubElement() : document.getElementById("modeClassicButton");
+    this.modeAdvancedButton = this.headless ? createStubElement() : document.getElementById("modeAdvancedButton");
+
+    this.scoreValue = this.headless ? createStubElement() : document.getElementById("scoreValue");
+    this.highScoreValue = this.headless ? createStubElement() : document.getElementById("highScoreValue");
+    this.modeValue = this.headless ? createStubElement() : document.getElementById("modeValue");
+    this.holesValue = this.headless ? createStubElement() : document.getElementById("holesValue");
+    this.speedValue = this.headless ? createStubElement() : document.getElementById("speedValue");
+    this.statusValue = this.headless ? createStubElement() : document.getElementById("statusValue");
+    this.modeHint = this.headless ? createStubElement() : document.getElementById("modeHint");
+    this.abilityTitle = this.headless ? createStubElement() : document.getElementById("abilityTitle");
+    this.abilityDescription = this.headless ? createStubElement() : document.getElementById("abilityDescription");
+    this.abilityScoring = this.headless ? createStubElement() : document.getElementById("abilityScoring");
+    this.abilityRisk = this.headless ? createStubElement() : document.getElementById("abilityRisk");
+    this.aiDebugStatus = this.headless ? createStubElement() : document.getElementById("aiDebugStatus");
+    this.aiDebugModel = this.headless ? createStubElement() : document.getElementById("aiDebugModel");
+    this.aiDebugAction = this.headless ? createStubElement() : document.getElementById("aiDebugAction");
+    this.aiDebugTopChoices = this.headless ? createStubElement() : document.getElementById("aiDebugTopChoices");
+    this.aiDebugHeuristic = this.headless ? createStubElement() : document.getElementById("aiDebugHeuristic");
+    this.aiDebugAgreement = this.headless ? createStubElement() : document.getElementById("aiDebugAgreement");
+    this.aiDebugBehavior = this.headless ? createStubElement() : document.getElementById("aiDebugBehavior");
+    this.aiDebugTarget = this.headless ? createStubElement() : document.getElementById("aiDebugTarget");
+    this.aiDebugFloor = this.headless ? createStubElement() : document.getElementById("aiDebugFloor");
+
+    this.assets = this.headless ? new SilentAssetStore() : new AssetStore(buildImageManifest());
+    this.assetsReady = this.headless;
+    this.loopStarted = false;
+    this.save = this.headless
+      ? sanitizeSaveState(options.saveState ?? {})
+      : readSaveState();
+    if (options.selectedMode === 0 || options.selectedMode === 1) {
+      this.save.selectedMode = options.selectedMode;
+    }
+
+    this.audio = this.headless
+      ? new SilentAudioBank(this.save.soundEnabled)
+      : new AudioBank(SOUND_MANIFEST, this.save.soundEnabled);
+    this.music = this.headless
+      ? new SilentMusicBank(this.save.musicEnabled)
+      : new MusicBank(MUSIC_MANIFEST, this.save.musicEnabled);
+    this.proceduralSfx = this.headless
+      ? new SilentProceduralSfxBank(this.save.soundEnabled)
+      : new ProceduralSfxBank(this.save.soundEnabled);
+    this.scheduler = new Scheduler();
+
+    this.input = {
+      left: false,
+      right: false,
+      action: false,
+      lastHorizontalDirection: 1,
+    };
+
+    this.selectedMode = this.save.selectedMode;
+    this.highScores = {
+      pyoro1: this.save.highScores.pyoro1,
+      pyoro2: this.save.highScores.pyoro2,
+    };
+    this.save.highScores = this.highScores;
+    this.score = 0;
+    this.speed = 1;
+    this.cases = [];
+    this.beans = [];
+    this.angels = [];
+    this.popups = [];
+    this.seeds = [];
+    this.leaves = [];
+    this.smokes = [];
+    this.pyoro = null;
+    this.running = false;
+    this.started = false;
+    this.paused = false;
+    this.gameOver = false;
+    this.lastTimestamp = null;
+    this.currentBackgroundId = 0;
+    this.backgroundFade = null;
+    this.animatedBackgroundId = 13;
+    this.animatedAccumulator = 0;
+    this.lastMusicStyleType = 0;
+    this.lastMusicScore = 0;
+    this.lastAudioStyleType = 0;
+    this.musicPlaybackRate = 1;
+    this.aiEnabled = false;
+    this.aiPolicies = new Map();
+    this.aiLoadStates = new Map();
+    this.aiDiagnostics = {
+      chosenActionIndex: 0,
+      heuristicActionIndex: 0,
+      confidence: 0,
+      topChoices: [],
+      reason: "inactive",
+      target: null,
+      totalDecisions: 0,
+      actionCounts: Array(ACTION_DEFINITIONS.length).fill(0),
+      sameActionStreak: 0,
+      longestSameActionStreak: 0,
+      lastActionIndex: null,
+      edgeSteps: 0,
+      heuristicAgreements: 0,
+      idleSteps: 0,
+      abilitySteps: 0,
+      horizontalSwitches: 0,
+      lastHorizontalDirection: 0,
+      stuckRisk: "low",
+      lastAvailableTileFraction: 1,
+      lastNoScoreSteps: 0,
+      modelSummary: "No model",
+    };
+
+    this.loop = this.loop.bind(this);
+  }
+
+  setSeed(seed = Date.now()) {
+    this.seed = normalizeSeed(seed);
+    this.rng = createSeededRandom(this.seed);
+    return this.seed;
+  }
+
+  random() {
+    return this.rng();
+  }
+
+  randomRange(min, max) {
+    return min + this.random() * (max - min);
+  }
+
+  choice(values) {
+    if (!values.length) {
+      return null;
+    }
+    return values[Math.floor(this.random() * values.length)];
+  }
+
+  holeCount() {
+    return this.cases.filter((tile) => !tile.exists).length;
+  }
+
+  activeBeans() {
+    return this.beans.filter((bean) => !bean.removed && !bean.caught);
+  }
+
+  bestPyoro1Plan() {
+    const player = this.pyoro;
+    if (!(player instanceof ClassicPyoro) || player.dead) {
+      return null;
+    }
+
+    const minX = player.width / 2;
+    const maxX = CONFIG.worldWidth - player.width / 2;
+    const floorDamage = this.holeCount() / CONFIG.worldWidth;
+    let bestPlan = null;
+
+    for (const bean of this.activeBeans()) {
+      const verticalGap = player.y - 0.4 - bean.y;
+      if (verticalGap <= 0) {
+        continue;
+      }
+
+      const beanFallSpeed = CONFIG.beanSpeed * bean.speedMultiplier * this.speed;
+      const travelTime = verticalGap / (CONFIG.tongueSpeed + beanFallSpeed);
+
+      for (const direction of [-1, 1]) {
+        const targetX = direction === 1
+          ? bean.x - 1.6 - CONFIG.tongueSpeed * travelTime
+          : bean.x + 1.6 + CONFIG.tongueSpeed * travelTime;
+
+        if (targetX < minX || targetX > maxX) {
+          continue;
+        }
+
+        const urgency = bean.y / CONFIG.worldHeight;
+        const lateralDistance = Math.abs(targetX - player.x) / CONFIG.worldWidth;
+        const typeBonus = bean.type === "super"
+          ? 0.35 + floorDamage * 0.9
+          : bean.type === "pink"
+            ? 0.18 + floorDamage * 0.45
+            : 0;
+        const withinWindow = Math.abs(player.x - targetX) <= 0.65;
+        const plan = {
+          bean,
+          direction,
+          targetX,
+          urgency: clamp(urgency, 0, 1),
+          lateralDistance: clamp(lateralDistance, 0, 1),
+          withinWindow,
+          score: urgency * 2.8 + typeBonus - lateralDistance + (withinWindow ? 0.3 : 0),
+        };
+
+        if (!bestPlan || plan.score > bestPlan.score) {
+          bestPlan = plan;
+        }
+      }
+    }
+
+    return bestPlan;
+  }
+
+  bestPyoro2Target() {
+    const player = this.pyoro;
+    if (!(player instanceof Pyoro2) || player.dead) {
+      return null;
+    }
+
+    const floorDamage = this.holeCount() / CONFIG.worldWidth;
+    let bestTarget = null;
+
+    for (const bean of this.activeBeans()) {
+      const direction = bean.x >= player.x ? 1 : -1;
+      const aligned = player.direction === direction && player.isShootingEntity(bean);
+      const urgency = bean.y / CONFIG.worldHeight;
+      const lateralDistance = Math.abs(bean.x - player.x) / CONFIG.worldWidth;
+      const typeBonus = bean.type === "super"
+        ? 0.35 + floorDamage * 0.9
+        : bean.type === "pink"
+          ? 0.18 + floorDamage * 0.45
+          : 0;
+      const target = {
+        bean,
+        direction,
+        aligned,
+        urgency: clamp(urgency, 0, 1),
+        lateralDistance: clamp(lateralDistance, 0, 1),
+        score: urgency * 2.5 + typeBonus - lateralDistance + (aligned ? 0.5 : 0),
+      };
+
+      if (!bestTarget || target.score > bestTarget.score) {
+        bestTarget = target;
+      }
+    }
+
+    return bestTarget;
+  }
+
+  policyObservationSize() {
+    return 14 + CONFIG.worldWidth * 5 + POLICY_TOP_BEAN_COUNT * 6 + POLICY_SPECIAL_FEATURE_COUNT;
+  }
+
+  buildPolicyObservation() {
+    const player = this.pyoro ?? {
+      x: 2,
+      direction: 1,
+      shootFrame: 0,
+    };
+    const tongue = player instanceof ClassicPyoro ? player.tongue : null;
+    const holes = [];
+    const repairing = [];
+    const normalBeans = Array(CONFIG.worldWidth).fill(0);
+    const pinkBeans = Array(CONFIG.worldWidth).fill(0);
+    const superBeans = Array(CONFIG.worldWidth).fill(0);
+    const activeBeans = [];
+
+    for (let index = 0; index < CONFIG.worldWidth; index += 1) {
+      const tile = this.cases[index] || { exists: true, isRepairing: false };
+      holes.push(tile.exists ? 0 : 1);
+      repairing.push(tile.isRepairing ? 1 : 0);
+    }
+
+    for (const bean of this.beans) {
+      if (bean.removed || bean.caught) {
+        continue;
+      }
+
+      const laneIndex = clamp(Math.floor(bean.x), 0, CONFIG.worldWidth - 1);
+      const urgency = clamp(bean.y / CONFIG.worldHeight, 0, 1);
+      const target = bean.type === "super"
+        ? superBeans
+        : bean.type === "pink"
+          ? pinkBeans
+          : normalBeans;
+      target[laneIndex] = Math.max(target[laneIndex], urgency);
+      activeBeans.push(bean);
+    }
+
+    activeBeans.sort((left, right) => {
+      const urgencyDelta = right.y - left.y;
+      if (urgencyDelta !== 0) {
+        return urgencyDelta;
+      }
+      return Math.abs(left.x - player.x) - Math.abs(right.x - player.x);
+    });
+
+    const beanFeatures = [];
+    for (let index = 0; index < POLICY_TOP_BEAN_COUNT; index += 1) {
+      const bean = activeBeans[index];
+      if (!bean) {
+        beanFeatures.push(0, 0, 0, 0, 0, 0);
+        continue;
+      }
+
+      beanFeatures.push(
+        clamp((bean.x - player.x) / (CONFIG.worldWidth / 2), -1, 1),
+        clamp(bean.x / CONFIG.worldWidth, 0, 1),
+        clamp(bean.y / CONFIG.worldHeight, 0, 1),
+        clamp(bean.speedMultiplier / 3, 0, 1),
+        bean.type === "pink" ? 1 : 0,
+        bean.type === "super" ? 1 : 0,
+      );
+    }
+
+    const pyoro1Plan = this.bestPyoro1Plan();
+    const pyoro2Target = this.bestPyoro2Target();
+    const pyoro1Features = pyoro1Plan
+      ? [
+        1,
+        pyoro1Plan.direction,
+        clamp(pyoro1Plan.targetX / CONFIG.worldWidth, 0, 1),
+        clamp((pyoro1Plan.targetX - player.x) / (CONFIG.worldWidth / 2), -1, 1),
+        pyoro1Plan.urgency,
+        pyoro1Plan.withinWindow ? 1 : 0,
+        pyoro1Plan.bean.type === "pink" ? 1 : 0,
+        pyoro1Plan.bean.type === "super" ? 1 : 0,
+      ]
+      : [0, 0, 0, 0, 0, 0, 0, 0];
+    const pyoro2Features = pyoro2Target
+      ? [
+        1,
+        pyoro2Target.direction,
+        pyoro2Target.urgency,
+        pyoro2Target.aligned ? 1 : 0,
+        pyoro2Target.bean.type === "pink" ? 1 : 0,
+        pyoro2Target.bean.type === "super" ? 1 : 0,
+        clamp((pyoro2Target.bean.x - player.x) / (CONFIG.worldWidth / 2), -1, 1),
+      ]
+      : [0, 0, 0, 0, 0, 0, 0];
+
+    return [
+      this.selectedMode === 0 ? 1 : 0,
+      this.selectedMode === 1 ? 1 : 0,
+      clamp(player.x / CONFIG.worldWidth, 0, 1),
+      player.direction,
+      clamp((this.speed - 1) / 4, 0, 1),
+      clamp(Math.log1p(this.score) / 11, 0, 1),
+      this.holeCount() / CONFIG.worldWidth,
+      clamp(activeBeans.length / 12, 0, 1),
+      (tongue || (player instanceof Pyoro2 && player.shootFrame > 0)) ? 1 : 0,
+      this.input.action ? 1 : 0,
+      player instanceof Pyoro2 ? player.shootFrame / 4 : 0,
+      tongue ? clamp(tongue.x / CONFIG.worldWidth, 0, 1) : 0,
+      tongue ? clamp(tongue.y / CONFIG.worldHeight, 0, 1) : 0,
+      tongue?.goBack ? 1 : 0,
+      ...holes,
+      ...repairing,
+      ...normalBeans,
+      ...pinkBeans,
+      ...superBeans,
+      ...beanFeatures,
+      ...pyoro1Features,
+      ...pyoro2Features,
+    ];
+  }
+
+  async init() {
+    if (this.headless) {
+      this.updateModeUi();
+      this.previewSelectedMode();
+      return;
+    }
+
+    this.bindUi();
+    this.applyStretchPreference();
+    this.syncSoundButton();
+    this.syncMusicButton();
+    this.syncStretchButton();
+    this.syncFullscreenButton();
+    this.syncAiButton();
+    await this.loadCoreAssets();
+  }
+
+  async loadCoreAssets() {
+    this.showLoadingOverlay();
+
+    try {
+      await Promise.all([
+        this.assets.load(),
+        this.audio.preload(),
+        this.music.preload(),
+        this.proceduralSfx.preload({
+          bean_cut: SOUND_MANIFEST.bean_cut,
+          pyoro_move: SOUND_MANIFEST.pyoro_move,
+        }),
+      ]);
+    } catch (error) {
+      this.showOverlay(
+        "Asset Load Failed",
+        error instanceof Error ? error.message : "The browser version could not load its assets.",
+        "Retry",
+      );
+      return;
+    }
+
+    this.assetsReady = true;
+    this.updateModeUi();
+    this.previewSelectedMode();
+    void this.loadAiPolicy(this.selectedMode);
+    if (!this.loopStarted) {
+      this.loopStarted = true;
+      window.requestAnimationFrame(this.loop);
+    }
+  }
+
+  showLoadingOverlay() {
+    this.overlayTitle.textContent = "Loading Pyoro Web...";
+    this.overlayMessage.textContent = "Preparing sprites and sounds.";
+    this.overlayButton.textContent = "Loading...";
+    this.overlayButton.disabled = true;
+    this.overlay.classList.remove("hidden");
+  }
+
+  async primeAudio() {
+    await Promise.all([
+      this.audio.unlock(),
+      this.music.unlock(),
+      this.proceduralSfx.unlock(),
+    ]);
+  }
+
+  bindUi() {
+    const primeAudioOnce = () => {
+      void this.primeAudio();
+    };
+
+    document.addEventListener("pointerdown", primeAudioOnce, { once: true });
+    document.addEventListener("keydown", primeAudioOnce, { once: true });
+
+    this.startButton.addEventListener("click", () => {
+      void this.primeAudio();
+      this.startNewRun();
+    });
+
+    this.pauseButton.addEventListener("click", () => {
+      this.togglePause();
+    });
+
+    this.aiButton.addEventListener("click", () => {
+      void this.toggleAiControl();
+    });
+
+    this.muteButton.addEventListener("click", () => {
+      void this.primeAudio();
+      this.audio.toggle();
+      this.proceduralSfx.setEnabled(this.audio.enabled);
+      this.save.soundEnabled = this.audio.enabled;
+      writeSaveState(this.save);
+      this.syncSoundButton();
+    });
+
+    this.musicButton.addEventListener("click", () => {
+      void this.primeAudio();
+      this.music.toggle();
+      this.save.musicEnabled = this.music.enabled;
+      writeSaveState(this.save);
+      this.syncMusicButton();
+      if (this.music.enabled && !this.paused) {
+        this.updateMusic(0);
+      }
+    });
+
+    this.fullscreenButton.addEventListener("click", () => {
+      this.toggleFullscreen();
+    });
+
+    this.stretchButton.addEventListener("click", () => {
+      this.toggleStretchFullscreen();
+    });
+
+    this.modeClassicButton.addEventListener("click", () => {
+      this.handleModeSelection(0);
+    });
+
+    this.modeAdvancedButton.addEventListener("click", () => {
+      this.handleModeSelection(1);
+    });
+
+    this.overlayButton.addEventListener("click", () => {
+      if (!this.assetsReady) {
+        void this.loadCoreAssets();
+        return;
+      }
+
+      if (!this.started || this.gameOver) {
+        this.startNewRun();
+      } else if (this.paused) {
+        this.resume();
+      }
+    });
+
+    document.addEventListener("keydown", (event) => {
+      if (["ArrowLeft", "ArrowRight", "Space"].includes(event.code)) {
+        event.preventDefault();
+      }
+
+      if (event.code === "ArrowLeft" || event.code === "KeyA") {
+        if (event.repeat) {
+          return;
+        }
+
+        this.setDirectionInput(-1, true);
+        return;
+      }
+
+      if (event.code === "ArrowRight" || event.code === "KeyD") {
+        if (event.repeat) {
+          return;
+        }
+
+        this.setDirectionInput(1, true);
+        return;
+      }
+
+      if (event.code === "Digit1") {
+        this.handleModeSelection(0);
+        return;
+      }
+
+      if (event.code === "Digit2") {
+        this.handleModeSelection(1);
+        return;
+      }
+
+      if (event.code === "Space") {
+        if (event.repeat) {
+          return;
+        }
+
+        this.handleActionPress();
+        return;
+      }
+
+      if (event.code === "KeyP" || event.code === "Escape") {
+        this.togglePause();
+        return;
+      }
+
+      if (event.code === "KeyR") {
+        this.startNewRun();
+        return;
+      }
+
+      if (event.code === "KeyF") {
+        this.toggleFullscreen();
+      }
+    });
+
+    document.addEventListener("keyup", (event) => {
+      if (event.code === "ArrowLeft" || event.code === "KeyA") {
+        this.setDirectionInput(-1, false);
+        return;
+      }
+
+      if (event.code === "ArrowRight" || event.code === "KeyD") {
+        this.setDirectionInput(1, false);
+        return;
+      }
+
+      if (event.code === "Space") {
+        this.handleActionRelease();
+      }
+    });
+
+    for (const button of document.querySelectorAll("[data-control]")) {
+      const control = button.getAttribute("data-control");
+
+      if (control === "pause") {
+        button.addEventListener("click", () => {
+          this.togglePause();
+        });
+        continue;
+      }
+
+      const onPress = (event) => {
+        event.preventDefault();
+
+        if (control === "left") {
+          this.setDirectionInput(-1, true);
+        } else if (control === "right") {
+          this.setDirectionInput(1, true);
+        } else if (control === "action") {
+          this.handleActionPress();
+        }
+      };
+
+      const onRelease = (event) => {
+        event.preventDefault();
+
+        if (control === "left") {
+          this.setDirectionInput(-1, false);
+        } else if (control === "right") {
+          this.setDirectionInput(1, false);
+        } else if (control === "action") {
+          this.handleActionRelease();
+        }
+      };
+
+      button.addEventListener("pointerdown", onPress);
+      button.addEventListener("pointerup", onRelease);
+      button.addEventListener("pointerleave", onRelease);
+      button.addEventListener("pointercancel", onRelease);
+    }
+
+    window.addEventListener("blur", () => {
+      this.input.left = false;
+      this.input.right = false;
+      this.input.action = false;
+      if (this.started && this.running && !this.gameOver) {
+        this.pause("Paused", "The game paused when the browser lost focus.");
+      }
+    });
+
+    document.addEventListener("fullscreenchange", () => {
+      this.syncFullscreenButton();
+    });
+
+    document.addEventListener("webkitfullscreenchange", () => {
+      this.syncFullscreenButton();
+    });
+  }
+
+  syncSoundButton() {
+    this.muteButton.textContent = this.audio.enabled ? "Sound: On" : "Sound: Off";
+  }
+
+  syncMusicButton() {
+    if (!this.musicButton) {
+      return;
+    }
+
+    this.musicButton.textContent = this.music.enabled ? "Music: On" : "Music: Off";
+  }
+
+  aiModelPath(modeId = this.selectedMode) {
+    return AI_MODEL_PATHS[GAME_MODES[modeId]?.key] || null;
+  }
+
+  currentAiLoadState(modeId = this.selectedMode) {
+    return this.aiLoadStates.get(modeId) || {
+      status: "idle",
+      policy: null,
+      promise: null,
+    };
+  }
+
+  currentAiPolicy(modeId = this.selectedMode) {
+    return this.aiPolicies.get(modeId) || null;
+  }
+
+  resetAiDiagnostics() {
+    this.aiDiagnostics = {
+      chosenActionIndex: 0,
+      heuristicActionIndex: 0,
+      confidence: 0,
+      topChoices: [],
+      reason: this.aiEnabled ? "waiting" : "inactive",
+      target: null,
+      totalDecisions: 0,
+      actionCounts: Array(ACTION_DEFINITIONS.length).fill(0),
+      sameActionStreak: 0,
+      longestSameActionStreak: 0,
+      lastActionIndex: null,
+      edgeSteps: 0,
+      heuristicAgreements: 0,
+      idleSteps: 0,
+      abilitySteps: 0,
+      horizontalSwitches: 0,
+      lastHorizontalDirection: 0,
+      stuckRisk: "low",
+      lastAvailableTileFraction: 1,
+      lastNoScoreSteps: 0,
+      lastScore: this.score,
+      modelSummary: this.currentAiPolicy()
+        ? (
+          `${this.currentAiPolicy().metadata?.trainer ?? "policy"}`
+            + (this.currentAiPolicy().metadata?.iterationsCompleted !== undefined
+              ? ` @ ${this.currentAiPolicy().metadata.iterationsCompleted}`
+              : "")
+        )
+        : "No model",
+    };
+  }
+
+  recordAiDecision(actionIndex, probabilities, heuristicDecision) {
+    const action = ACTION_DEFINITIONS[actionIndex] || ACTION_DEFINITIONS[0];
+    const heuristicActionIndex = heuristicDecision?.actionIndex ?? 0;
+    const topChoices = topProbabilityChoices(probabilities, 3);
+    const currentEdge = Boolean(
+      this.pyoro
+      && (
+        this.pyoro.x <= this.pyoro.width / 2 + 0.75
+        || this.pyoro.x >= CONFIG.worldWidth - this.pyoro.width / 2 - 0.75
+      ),
+    );
+
+    this.aiDiagnostics.totalDecisions += 1;
+    this.aiDiagnostics.actionCounts[actionIndex] += 1;
+    this.aiDiagnostics.sameActionStreak = this.aiDiagnostics.lastActionIndex === actionIndex
+      ? this.aiDiagnostics.sameActionStreak + 1
+      : 1;
+    this.aiDiagnostics.longestSameActionStreak = Math.max(
+      this.aiDiagnostics.longestSameActionStreak,
+      this.aiDiagnostics.sameActionStreak,
+    );
+    this.aiDiagnostics.lastActionIndex = actionIndex;
+
+    if (action.horizontal !== 0) {
+      if (
+        this.aiDiagnostics.lastHorizontalDirection !== 0
+        && this.aiDiagnostics.lastHorizontalDirection !== action.horizontal
+      ) {
+        this.aiDiagnostics.horizontalSwitches += 1;
+      }
+      this.aiDiagnostics.lastHorizontalDirection = action.horizontal;
+    }
+
+    if (action.id === 0) {
+      this.aiDiagnostics.idleSteps += 1;
+    }
+    if (action.abilityHeld) {
+      this.aiDiagnostics.abilitySteps += 1;
+    }
+    if (currentEdge) {
+      this.aiDiagnostics.edgeSteps += 1;
+    }
+    if (heuristicActionIndex === actionIndex) {
+      this.aiDiagnostics.heuristicAgreements += 1;
+    }
+
+    this.aiDiagnostics.chosenActionIndex = actionIndex;
+    this.aiDiagnostics.heuristicActionIndex = heuristicActionIndex;
+    this.aiDiagnostics.confidence = topChoices[0]?.probability ?? 0;
+    this.aiDiagnostics.topChoices = topChoices;
+    this.aiDiagnostics.reason = heuristicDecision?.reason ?? "unknown";
+    this.aiDiagnostics.target = heuristicDecision?.target ?? null;
+    this.aiDiagnostics.modelSummary = this.currentAiPolicy()
+      ? (
+        `${this.currentAiPolicy().metadata?.trainer ?? "policy"}`
+          + (this.currentAiPolicy().metadata?.iterationsCompleted !== undefined
+            ? ` @ ${this.currentAiPolicy().metadata.iterationsCompleted}`
+            : "")
+      )
+      : "No model";
+
+    this.aiDiagnostics.lastNoScoreSteps = this.score > this.aiDiagnostics.lastScore
+      ? 0
+      : this.aiDiagnostics.lastNoScoreSteps + 1;
+    this.aiDiagnostics.lastScore = this.score;
+    this.aiDiagnostics.lastAvailableTileFraction = (
+      this.cases.length - this.holeCount()
+    ) / Math.max(this.cases.length, 1);
+
+    const dominantActionCount = Math.max(...this.aiDiagnostics.actionCounts);
+    const dominantActionFraction = dominantActionCount / Math.max(this.aiDiagnostics.totalDecisions, 1);
+    const edgeRate = this.aiDiagnostics.edgeSteps / Math.max(this.aiDiagnostics.totalDecisions, 1);
+
+    if (
+      this.aiDiagnostics.sameActionStreak >= 180
+      || dominantActionFraction >= 0.8
+      || edgeRate >= 0.7
+    ) {
+      this.aiDiagnostics.stuckRisk = "high";
+    } else if (
+      this.aiDiagnostics.sameActionStreak >= 90
+      || dominantActionFraction >= 0.65
+      || edgeRate >= 0.5
+    ) {
+      this.aiDiagnostics.stuckRisk = "medium";
+    } else {
+      this.aiDiagnostics.stuckRisk = "low";
+    }
+  }
+
+  aiTargetSummary() {
+    const target = this.aiDiagnostics.target;
+    if (!target) {
+      return "No active target";
+    }
+
+    const beanType = target.beanType || target.type || "normal";
+    const beanCoords = target.beanX !== undefined && target.beanY !== undefined
+      ? `${beanType} @ (${target.beanX.toFixed(1)}, ${target.beanY.toFixed(1)})`
+      : beanType;
+    if (target.targetX !== undefined) {
+      return `${beanCoords} -> intercept x=${target.targetX.toFixed(1)}`;
+    }
+    return beanCoords;
+  }
+
+  updateAiDiagnosticsUi() {
+    const state = this.currentAiLoadState(this.selectedMode);
+    const totalDecisions = Math.max(this.aiDiagnostics.totalDecisions, 1);
+    const dominantActionCount = Math.max(...this.aiDiagnostics.actionCounts);
+    const dominantActionIndex = this.aiDiagnostics.actionCounts.indexOf(dominantActionCount);
+    const dominantActionFraction = dominantActionCount / totalDecisions;
+    const edgeRate = this.aiDiagnostics.edgeSteps / totalDecisions;
+    const agreementRate = this.aiDiagnostics.heuristicAgreements / totalDecisions;
+    const modelLoaded = state.status === "ready";
+
+    this.aiDebugStatus.textContent = !modelLoaded
+      ? (state.status === "unavailable" ? "Unavailable" : "Loading")
+      : (this.aiEnabled ? `Running (${this.aiDiagnostics.stuckRisk})` : "Loaded, AI Off");
+    this.aiDebugModel.textContent = this.aiDiagnostics.modelSummary;
+    this.aiDebugAction.textContent = modelLoaded
+      ? `${actionLabelForIndex(this.aiDiagnostics.chosenActionIndex)} (${Math.round(this.aiDiagnostics.confidence * 100)}%)`
+      : "No action";
+    this.aiDebugTopChoices.textContent = modelLoaded
+      ? this.aiDiagnostics.topChoices
+        .map((choice) => `${choice.label} ${Math.round(choice.probability * 100)}%`)
+        .join(", ")
+      : "No probabilities";
+    this.aiDebugHeuristic.textContent = modelLoaded
+      ? `${actionLabelForIndex(this.aiDiagnostics.heuristicActionIndex)} (${this.aiDiagnostics.reason.replaceAll("_", " ")})`
+      : "No heuristic";
+    this.aiDebugAgreement.textContent = modelLoaded
+      ? `${Math.round(agreementRate * 100)}% agree`
+      : "N/A";
+    this.aiDebugBehavior.textContent = modelLoaded
+      ? [
+        `dominant ${actionLabelForIndex(dominantActionIndex)} ${Math.round(dominantActionFraction * 100)}%`,
+        `streak ${this.aiDiagnostics.sameActionStreak}`,
+        `edge ${Math.round(edgeRate * 100)}%`,
+      ].join(" | ")
+      : "No behavior data";
+    this.aiDebugTarget.textContent = this.aiTargetSummary();
+    this.aiDebugFloor.textContent = [
+      `${Math.round(this.aiDiagnostics.lastAvailableTileFraction * 100)}% floor`,
+      `no-score ${this.aiDiagnostics.lastNoScoreSteps}`,
+      `stuck ${this.aiDiagnostics.stuckRisk}`,
+    ].join(" | ");
+  }
+
+  syncAiButton() {
+    if (!this.aiButton) {
+      return;
+    }
+
+    const state = this.currentAiLoadState(this.selectedMode);
+    if (state.status === "ready") {
+      this.aiButton.disabled = false;
+      this.aiButton.textContent = this.aiEnabled ? "AI: On" : "AI: Off";
+      this.aiButton.setAttribute("aria-pressed", this.aiEnabled ? "true" : "false");
+      return;
+    }
+
+    this.aiButton.disabled = true;
+    this.aiButton.setAttribute("aria-pressed", "false");
+    this.aiButton.textContent = state.status === "loading" || state.status === "idle"
+      ? "AI: Loading..."
+      : "AI: Unavailable";
+  }
+
+  async loadAiPolicy(modeId = this.selectedMode) {
+    if (this.headless) {
+      return null;
+    }
+
+    const existing = this.currentAiLoadState(modeId);
+    if (existing.status === "ready") {
+      return existing.policy;
+    }
+    if (existing.promise) {
+      return existing.promise;
+    }
+
+    const path = this.aiModelPath(modeId);
+    if (!path) {
+      this.aiLoadStates.set(modeId, {
+        status: "unavailable",
+        policy: null,
+        promise: null,
+      });
+      this.syncAiButton();
+      return null;
+    }
+
+    const promise = loadPolicyModelFromUrl(path)
+      .then((model) => {
+        if (model.modeKey && model.modeKey !== GAME_MODES[modeId].key) {
+          throw new Error(`Model at ${path} is for ${model.modeKey}, not ${GAME_MODES[modeId].key}.`);
+        }
+        if (model.observationSize !== this.policyObservationSize()) {
+          throw new Error(
+            `Model at ${path} expects observation size ${model.observationSize}, not ${this.policyObservationSize()}.`,
+          );
+        }
+
+        this.aiPolicies.set(modeId, model);
+        this.aiLoadStates.set(modeId, {
+          status: "ready",
+          policy: model,
+          promise: null,
+        });
+        if (modeId === this.selectedMode) {
+          this.resetAiDiagnostics();
+        }
+        this.syncAiButton();
+        return model;
+      })
+      .catch((_error) => {
+        this.aiPolicies.delete(modeId);
+        this.aiLoadStates.set(modeId, {
+          status: "unavailable",
+          policy: null,
+          promise: null,
+        });
+        if (modeId === this.selectedMode) {
+          this.aiEnabled = false;
+          this.clearAllInput();
+          this.resetAiDiagnostics();
+          this.syncAiButton();
+        }
+        return null;
+      });
+
+    this.aiLoadStates.set(modeId, {
+      status: "loading",
+      policy: null,
+      promise,
+    });
+    this.syncAiButton();
+    return promise;
+  }
+
+  clearAllInput() {
+    this.input.left = false;
+    this.input.right = false;
+    const shouldRecall = this.input.action;
+    this.input.action = false;
+    if (shouldRecall && this.pyoro) {
+      this.pyoro.recallAbility();
+    }
+    this.syncPlayerMovementFromInput();
+  }
+
+  async toggleAiControl() {
+    const policy = await this.loadAiPolicy(this.selectedMode);
+    if (!policy) {
+      this.aiEnabled = false;
+      this.syncAiButton();
+      return;
+    }
+
+    this.aiEnabled = !this.aiEnabled;
+    this.clearAllInput();
+    this.resetAiDiagnostics();
+    this.syncAiButton();
+  }
+
+  applyDiscreteAction(actionIndex = 0) {
+    const action = ACTION_DEFINITIONS[actionIndex] || ACTION_DEFINITIONS[0];
+    this.setDirectionInput(-1, action.horizontal === -1, "ai");
+    this.setDirectionInput(1, action.horizontal === 1, "ai");
+    if (action.abilityHeld) {
+      this.handleActionPress("ai");
+    } else {
+      this.handleActionRelease("ai");
+    }
+    return action;
+  }
+
+  applyStretchPreference() {
+    if (!this.canvasFrame) {
+      return;
+    }
+
+    this.canvasFrame.classList.toggle("stretch-fullscreen", Boolean(this.save.stretchFullscreen));
+  }
+
+  syncStretchButton() {
+    if (!this.stretchButton) {
+      return;
+    }
+
+    if (!this.supportsFullscreen()) {
+      this.stretchButton.disabled = true;
+      this.stretchButton.textContent = "Stretch: Off";
+      this.stretchButton.setAttribute("aria-pressed", "false");
+      return;
+    }
+
+    this.stretchButton.disabled = false;
+    this.stretchButton.textContent = this.save.stretchFullscreen ? "Stretch: On" : "Stretch: Off";
+    this.stretchButton.setAttribute(
+      "aria-pressed",
+      this.save.stretchFullscreen ? "true" : "false",
+    );
+  }
+
+  fullscreenElement() {
+    return document.fullscreenElement || document.webkitFullscreenElement || null;
+  }
+
+  supportsFullscreen() {
+    if (!this.canvasFrame) {
+      return false;
+    }
+
+    return Boolean(this.canvasFrame.requestFullscreen || this.canvasFrame.webkitRequestFullscreen);
+  }
+
+  isFullscreenActive() {
+    return this.fullscreenElement() === this.canvasFrame;
+  }
+
+  syncFullscreenButton() {
+    if (!this.fullscreenButton) {
+      return;
+    }
+
+    if (!this.supportsFullscreen()) {
+      this.fullscreenButton.disabled = true;
+      this.fullscreenButton.textContent = "Fullscreen Unsupported";
+      return;
+    }
+
+    this.fullscreenButton.disabled = false;
+    this.fullscreenButton.textContent = this.isFullscreenActive() ? "Exit Fullscreen" : "Fullscreen";
+  }
+
+  async enterFullscreen() {
+    if (!this.canvasFrame || !this.supportsFullscreen()) {
+      return;
+    }
+
+    if (this.canvasFrame.requestFullscreen) {
+      await this.canvasFrame.requestFullscreen();
+      return;
+    }
+
+    if (this.canvasFrame.webkitRequestFullscreen) {
+      this.canvasFrame.webkitRequestFullscreen();
+    }
+  }
+
+  async exitFullscreen() {
+    if (document.exitFullscreen) {
+      await document.exitFullscreen();
+      return;
+    }
+
+    if (document.webkitExitFullscreen) {
+      document.webkitExitFullscreen();
+    }
+  }
+
+  async toggleFullscreen() {
+    if (!this.supportsFullscreen()) {
+      return;
+    }
+
+    try {
+      if (this.isFullscreenActive()) {
+        await this.exitFullscreen();
+      } else {
+        await this.enterFullscreen();
+      }
+    } catch (_error) {
+      return;
+    }
+  }
+
+  toggleStretchFullscreen() {
+    if (!this.supportsFullscreen()) {
+      return;
+    }
+
+    this.save.stretchFullscreen = !this.save.stretchFullscreen;
+    writeSaveState(this.save);
+    this.applyStretchPreference();
+    this.syncStretchButton();
+  }
+
+  canControlPlayer() {
+    return Boolean(
+      this.started &&
+      this.running &&
+      !this.paused &&
+      !this.gameOver &&
+      this.pyoro &&
+      !this.pyoro.dead,
+    );
+  }
+
+  setDirectionInput(direction, pressed, source = "human") {
+    if (source === "human" && this.aiEnabled) {
+      return;
+    }
+
+    if (direction === -1) {
+      this.input.left = pressed;
+    } else {
+      this.input.right = pressed;
+    }
+
+    if (pressed) {
+      this.input.lastHorizontalDirection = direction;
+    }
+
+    this.syncPlayerMovementFromInput();
+  }
+
+  syncPlayerMovementFromInput() {
+    if (!this.pyoro) {
+      return;
+    }
+
+    if (!this.canControlPlayer()) {
+      this.pyoro.disableMove();
+      return;
+    }
+
+    if (this.input.left && this.input.right) {
+      this.pyoro.direction = this.input.lastHorizontalDirection;
+      this.pyoro.disableMove();
+      return;
+    }
+
+    if (this.input.left) {
+      this.pyoro.enableMoveLeft();
+      return;
+    }
+
+    if (this.input.right) {
+      this.pyoro.enableMoveRight();
+      return;
+    }
+
+    this.pyoro.disableMove();
+  }
+
+  handleActionPress(source = "human") {
+    if (source === "human" && this.aiEnabled) {
+      return;
+    }
+
+    if (this.input.action) {
+      return;
+    }
+
+    this.input.action = true;
+    void this.primeAudio();
+
+    if (!this.started || this.gameOver) {
+      this.startNewRun();
+    } else if (this.paused) {
+      this.resume();
+    } else if (this.canControlPlayer()) {
+      this.pyoro.shoot();
+    }
+  }
+
+  handleActionRelease(source = "human") {
+    if (source === "human" && this.aiEnabled) {
+      return;
+    }
+
+    this.input.action = false;
+    if (this.pyoro) {
+      this.pyoro.recallAbility();
+    }
+  }
+
+  currentMode() {
+    return GAME_MODES[this.selectedMode] || GAME_MODES[0];
+  }
+
+  modeHighScore(modeId = this.selectedMode) {
+    return this.highScores[GAME_MODES[modeId].key] || 0;
+  }
+
+  isModeUnlocked(modeId) {
+    return modeId === 0 || modeId === 1;
+  }
+
+  applyModeSelection(modeId) {
+    if (!this.isModeUnlocked(modeId)) {
+      return false;
+    }
+
+    this.selectedMode = modeId;
+    this.save.selectedMode = modeId;
+    writeSaveState(this.save);
+    this.updateModeUi();
+    return true;
+  }
+
+  previewSelectedMode() {
+    this.started = false;
+    this.running = false;
+    this.paused = false;
+    this.gameOver = false;
+    this.frameAccumulator = 0;
+    this.resetState();
+    this.updateMusic(0);
+    this.updateHud();
+    if (!this.headless) {
+      void this.loadAiPolicy(this.selectedMode);
+      this.showModeIntro();
+    }
+  }
+
+  handleModeSelection(modeId) {
+    if (!this.applyModeSelection(modeId)) {
+      return;
+    }
+
+    if (!this.currentAiPolicy(modeId)) {
+      this.aiEnabled = false;
+    }
+    if (!this.headless) {
+      void this.loadAiPolicy(modeId);
+    }
+    this.syncAiButton();
+
+    if (this.running) {
+      this.startNewRun(modeId);
+    } else {
+      this.previewSelectedMode();
+    }
+  }
+
+  updateModeUi() {
+    this.modeClassicButton.classList.toggle("active", this.selectedMode === 0);
+    this.modeAdvancedButton.classList.toggle("active", this.selectedMode === 1);
+    this.modeAdvancedButton.disabled = false;
+    this.modeAdvancedButton.textContent = "Pyoro 2";
+
+    const mode = this.currentMode();
+
+    this.modeHint.textContent = mode.id === 0
+      ? (
+        "Catch falling beans with your tongue. Pyoro 2 is always available from the mode selector."
+      )
+      : "Shoot diagonally to cut beans out of the air. Multi-bean shots award the same combo score to each bean hit.";
+
+    this.abilityTitle.textContent = `${mode.label} Ability`;
+    this.abilityDescription.textContent = mode.description;
+    this.abilityScoring.textContent = mode.scoring;
+    this.abilityRisk.textContent = mode.risk;
+  }
+
+  showModeIntro() {
+    const mode = this.currentMode();
+    const modeSpecificLine = mode.id === 0
+      ? (
+        "Pyoro 2 is already available in the selector above whenever you want to switch modes."
+      )
+      : "Each bean in a 1, 2, 3, or 4+ bean combo is worth 50, 100, 300, or 1000 points.";
+
+    this.showOverlay(
+      `${mode.label} Mode`,
+      `${mode.description} ${modeSpecificLine}`,
+      "Start Game",
+    );
+  }
+
+  resetState() {
+    if (this.pyoro) {
+      this.pyoro.stopMovementAudio();
+    }
+
+    this.scheduler.clear();
+    this.score = 0;
+    this.speed = 1;
+    this.cases = Array.from({ length: CONFIG.worldWidth }, () => ({
+      exists: true,
+      isRepairing: false,
+    }));
+    this.beans = [];
+    this.angels = [];
+    this.popups = [];
+    this.seeds = [];
+    this.leaves = [];
+    this.smokes = [];
+    this.pyoro = this.selectedMode === 1 ? new Pyoro2(this) : new ClassicPyoro(this);
+    this.currentBackgroundId = 0;
+    this.backgroundFade = null;
+    this.animatedBackgroundId = 13;
+    this.animatedAccumulator = 0;
+    this.lastMusicStyleType = 0;
+    this.lastMusicScore = 0;
+    this.lastAudioStyleType = 0;
+    this.musicPlaybackRate = 1;
+    this.lastTimestamp = null;
+    this.frameAccumulator = 0;
+    this.input.left = false;
+    this.input.right = false;
+    this.input.action = false;
+    this.input.lastHorizontalDirection = 1;
+    this.resetAiDiagnostics();
+    this.scheduleNextBean();
+  }
+
+  startNewRun(modeId = this.selectedMode) {
+    if (!this.assetsReady || !this.applyModeSelection(modeId)) {
+      return;
+    }
+
+    this.started = true;
+    this.running = true;
+    this.paused = false;
+    this.gameOver = false;
+    this.frameAccumulator = 0;
+    this.resetState();
+    this.running = true;
+    this.updateMusic(0);
+    this.hideOverlay();
+    this.updateHud();
+    if (!this.headless) {
+      void this.loadAiPolicy(this.selectedMode);
+    }
+    this.syncAiButton();
+  }
+
+  pause(title = "Paused", message = "Take a breath and jump back in when you are ready.") {
+    if (!this.started || this.gameOver) {
+      return;
+    }
+
+    this.running = false;
+    this.paused = true;
+    this.lastTimestamp = null;
+    this.frameAccumulator = 0;
+    this.pyoro?.stopMovementAudio();
+    this.music.pauseAll();
+    this.showOverlay(title, message, "Resume");
+    this.updateHud();
+  }
+
+  resume() {
+    if (!this.started || this.gameOver) {
+      return;
+    }
+
+    this.running = true;
+    this.paused = false;
+    this.lastTimestamp = null;
+    this.frameAccumulator = 0;
+    this.music.resumeAll();
+    this.updateMusic(0);
+    this.hideOverlay();
+    this.updateHud();
+  }
+
+  togglePause() {
+    if (!this.started || this.gameOver) {
+      return;
+    }
+
+    if (this.paused) {
+      this.resume();
+    } else {
+      this.pause();
+    }
+  }
+
+  finishRun() {
+    if (this.gameOver) {
+      return;
+    }
+
+    this.running = false;
+    this.paused = false;
+    this.gameOver = true;
+    this.musicPlaybackRate = 1;
+    this.audio.setPlaybackRate(1);
+    this.input.left = false;
+    this.input.right = false;
+    this.input.action = false;
+    this.syncHighScore();
+    this.updateModeUi();
+    this.music.stopAll();
+    if (this.music.enabled) {
+      this.music.playOneShot("game_over", { volume: 0.45 });
+    }
+
+    this.showOverlay(
+      "Game Over",
+      `Final score: ${formatScore(this.score)}. Press Start, R, or Space to play again.`,
+      "Play Again",
+    );
+    this.updateHud();
+  }
+
+  showOverlay(title, message, buttonLabel) {
+    this.overlayTitle.textContent = title;
+    this.overlayMessage.textContent = message;
+    this.overlayButton.textContent = buttonLabel;
+    this.overlayButton.disabled = false;
+    this.overlay.classList.remove("hidden");
+  }
+
+  hideOverlay() {
+    this.overlay.classList.add("hidden");
+  }
+
+  styleType(score = this.score) {
+    if (score < 20000) {
+      return 0;
+    }
+
+    if (score < 30000) {
+      return 1;
+    }
+
+    return 2;
+  }
+
+  comboScore(hitCount) {
+    if (hitCount <= 0) {
+      return 0;
+    }
+
+    if (hitCount === 1) {
+      return 50;
+    }
+
+    if (hitCount === 2) {
+      return 100;
+    }
+
+    if (hitCount === 3) {
+      return 300;
+    }
+
+    return 1000;
+  }
+
+  scoreForHeight(y) {
+    if (y < CONFIG.worldHeight * 0.2) {
+      return 1000;
+    }
+
+    if (y < CONFIG.worldHeight * 0.4) {
+      return 300;
+    }
+
+    if (y < CONFIG.worldHeight * 0.6) {
+      return 100;
+    }
+
+    if (y < CONFIG.worldHeight * 0.8) {
+      return 50;
+    }
+
+    return 10;
+  }
+
+  addScore(value, x, y) {
+    if (!value) {
+      return;
+    }
+
+    this.score += value;
+    this.popups.push(new ScorePopup(this, x, y, value));
+    this.syncHighScore();
+    this.updateHud();
+  }
+
+  syncHighScore() {
+    const key = this.currentMode().key;
+    if (this.score > this.highScores[key]) {
+      this.highScores[key] = this.score;
+      this.save.highScores = this.highScores;
+      writeSaveState(this.save);
+    }
+  }
+
+  playSound(name, options) {
+    if (name === "bean_cut") {
+      const played = this.proceduralSfx.playBuffer("bean_cut", {
+        gain: options?.gain ?? 5,
+        playbackRate: options?.playbackRate ?? this.musicPlaybackRate,
+      });
+      if (played) {
+        return null;
+      }
+    }
+
+    return this.audio.play(name, {
+      ...options,
+      playbackRate: options?.playbackRate ?? this.musicPlaybackRate,
+    });
+  }
+
+  playPyoro2Shoot() {
+    return this.proceduralSfx.playPyoro2Shoot(this.musicPlaybackRate);
+  }
+
+  backgroundKey(backgroundId) {
+    return `background_${this.currentMode().backgroundSet}_${backgroundId}`;
+  }
+
+  updateAudioPlaybackRate(deltaTime) {
+    // Like the original, all audio slowly speeds up while Pyoro is alive.
+    // The rate resets on death, game over, and the 20000/30000 style changes.
+    const styleType = this.styleType();
+    if (styleType !== this.lastAudioStyleType) {
+      this.lastAudioStyleType = styleType;
+      this.musicPlaybackRate = 1;
+    } else if (this.pyoro && !this.pyoro.dead) {
+      this.musicPlaybackRate += CONFIG.audioSpeedAcceleration * deltaTime;
+    }
+
+    this.audio.setPlaybackRate(this.musicPlaybackRate);
+  }
+
+  updateMusic(deltaTime) {
+    if (!this.music.enabled) {
+      this.music.stopAll();
+      return;
+    }
+
+    if (!this.started || this.gameOver) {
+      this.music.stop("music_0");
+      this.music.stop("music_1");
+      this.music.stop("music_2");
+      this.music.stop("drums");
+      this.music.stop("organ");
+      this.music.stop("speed_drums");
+      this.music.playLoop("intro", {
+        volume: 0.32,
+        playbackRate: 1,
+      });
+      return;
+    }
+
+    this.music.stop("intro");
+
+    const styleType = this.styleType();
+    if (styleType === 0) {
+      if (!this.music.isPlaying("music_0")) {
+        this.music.stop("music_1");
+        this.music.stop("music_2");
+        this.music.stop("speed_drums");
+        this.music.playLoop("music_0", {
+          volume: 0.28,
+          playbackRate: this.musicPlaybackRate,
+        });
+      }
+
+      if (this.lastMusicScore < 5000 && this.score >= 5000 && !this.music.isPlaying("drums")) {
+        this.music.playLoop("drums", {
+          volume: 0.24,
+          startAt: this.music.currentTime("music_0"),
+          playbackRate: this.musicPlaybackRate,
+        });
+      }
+
+      if (this.lastMusicScore < 10000 && this.score >= 10000 && !this.music.isPlaying("organ")) {
+        this.music.playLoop("organ", {
+          volume: 0.22,
+          startAt: this.music.currentTime("music_0"),
+          playbackRate: this.musicPlaybackRate,
+        });
+      }
+    } else if (styleType === 1) {
+      if (this.lastMusicStyleType !== styleType || !this.music.isPlaying("music_1")) {
+        this.music.stopAll();
+        this.music.playLoop("music_1", {
+          volume: 0.32,
+          playbackRate: this.musicPlaybackRate,
+        });
+      }
+    } else {
+      if (this.lastMusicStyleType !== styleType || !this.music.isPlaying("music_2")) {
+        this.music.stopAll();
+        this.music.playLoop("music_2", {
+          volume: 0.32,
+          playbackRate: this.musicPlaybackRate,
+        });
+      }
+
+      if (this.lastMusicScore < 41000 && this.score >= 41000 && !this.music.isPlaying("speed_drums")) {
+        this.music.playLoop("speed_drums", {
+          volume: 0.22,
+          startAt: this.music.currentTime("music_2"),
+          playbackRate: this.musicPlaybackRate,
+        });
+      }
+    }
+
+    this.music.setPlaybackRate(this.musicPlaybackRate);
+
+    this.lastMusicStyleType = styleType;
+    this.lastMusicScore = this.score;
+  }
+
+  targetBackgroundId() {
+    if (this.score < 11000) {
+      return Math.floor(this.score / 1000);
+    }
+
+    if (this.score < 20000) {
+      return 10;
+    }
+
+    if (this.score < 30000) {
+      return 11;
+    }
+
+    if (this.score < 40000) {
+      return 12;
+    }
+
+    return this.animatedBackgroundId;
+  }
+
+  updateAnimatedBackground(deltaTime) {
+    if (this.score < 40000) {
+      this.animatedBackgroundId = 13;
+      this.animatedAccumulator = 0;
+      return;
+    }
+
+    this.animatedAccumulator += deltaTime;
+    while (this.animatedAccumulator >= CONFIG.backgroundAnimatedDuration) {
+      this.animatedAccumulator -= CONFIG.backgroundAnimatedDuration;
+      this.animatedBackgroundId = this.animatedBackgroundId < 20 ? this.animatedBackgroundId + 1 : 13;
+    }
+  }
+
+  updateBackgroundTransition(deltaTime) {
+    const target = this.targetBackgroundId();
+
+    if (!this.backgroundFade && this.currentBackgroundId !== target) {
+      this.backgroundFade = {
+        fromId: this.currentBackgroundId,
+        toId: target,
+        progress: 0,
+      };
+    }
+
+    if (!this.backgroundFade) {
+      return;
+    }
+
+    if (this.backgroundFade.toId !== target) {
+      this.backgroundFade = {
+        fromId: this.currentBackgroundId,
+        toId: target,
+        progress: 0,
+      };
+    }
+
+    this.backgroundFade.progress += deltaTime / CONFIG.backgroundTransitionDuration;
+    if (this.backgroundFade.progress >= 1) {
+      this.currentBackgroundId = this.backgroundFade.toId;
+      this.backgroundFade = null;
+    }
+  }
+
+  scheduleNextBean() {
+    this.scheduler.schedule(
+      CONFIG.beanFrequency * this.randomRange(0.5, 1.5) / (this.speed ** 1.5),
+      () => {
+        if (!this.gameOver) {
+          this.spawnBean();
+          this.scheduleNextBean();
+        }
+      },
+    );
+  }
+
+  spawnBean() {
+    const beanTypeId = Math.floor(this.randomRange(0, 6));
+    const x = Math.floor(this.randomRange(0, CONFIG.worldWidth)) + 0.75;
+    const speedMultiplier = this.randomRange(0.5, 1.5) * (this.speed ** 0.6);
+
+    let type = "normal";
+    if (beanTypeId >= 4 && this.score >= 5000 && beanTypeId === 5) {
+      type = "super";
+    } else if (beanTypeId >= 4) {
+      type = "pink";
+    }
+
+    this.beans.push(new Bean(this, type, x, 0, speedMultiplier));
+  }
+
+  repairCase(preferredIndex = null) {
+    const candidates = this.cases
+      .map((tile, index) => ({ tile, index }))
+      .filter(({ tile }) => !tile.exists && !tile.isRepairing);
+
+    if (!candidates.length) {
+      return;
+    }
+
+    let chosen = null;
+    if (preferredIndex !== null) {
+      chosen = candidates.find(({ index }) => index === preferredIndex) || null;
+    }
+
+    if (!chosen) {
+      chosen = this.choice(candidates);
+    }
+
+    chosen.tile.isRepairing = true;
+    this.angels.push(new Angel(this, chosen.index));
+  }
+
+  triggerSuperBean(sourceBean) {
+    const otherBeans = this.beans.filter((bean) => bean !== sourceBean);
+    let delay = 0;
+
+    for (const bean of otherBeans) {
+      this.scheduler.schedule(delay, () => {
+        if (bean.removed || bean.caught) {
+          return;
+        }
+
+        this.playSound("bean_implode");
+        bean.cut({ soundName: "bean_cut" });
+        bean.remove();
+        this.addScore(50, bean.x, bean.y);
+      });
+      delay += 0.1;
+    }
+
+    const holes = this.cases
+      .map((tile, index) => ({ tile, index }))
+      .filter(({ tile }) => !tile.exists && !tile.isRepairing)
+      .slice(0, 10);
+
+    holes.forEach(({ index }, holeIndex) => {
+      this.scheduler.schedule(holeIndex * 0.5, () => {
+        this.repairCase(index);
+      });
+    });
+  }
+
+  spawnSeeds(direction) {
+    this.seeds.push(new Seed(this, 35, direction));
+    this.seeds.push(new Seed(this, 55, direction));
+  }
+
+  spawnSmoke(x, y) {
+    this.smokes.push(new Smoke(this, x, y));
+  }
+
+  spawnLeaf(beanType, x, y) {
+    const variant = beanType === "pink" ? "pink" : beanType === "super" ? "super" : "normal";
+    const speed = this.randomRange(0.5, 1.5);
+    const leafX = x + this.randomRange(-0.5, 0.5);
+    const leafY = y + this.randomRange(-0.5, 0.2);
+    this.leaves.push(new Leaf(this, leafX, leafY, speed, variant));
+  }
+
+  update(deltaTime) {
+    this.speed += deltaTime * CONFIG.speedAcceleration;
+
+    // The original Python game accelerates the whole simulation over time,
+    // so entities and timers run on a scaled delta instead of raw frame time.
+    const gameDelta = deltaTime * this.speed;
+
+    this.updateAnimatedBackground(gameDelta);
+    this.updateBackgroundTransition(gameDelta);
+    this.pyoro.update(gameDelta);
+
+    for (const bean of this.beans) {
+      bean.update(gameDelta);
+    }
+
+    for (const angel of this.angels) {
+      angel.update(gameDelta);
+    }
+
+    for (const popup of this.popups) {
+      popup.update(gameDelta);
+    }
+
+    for (const seed of this.seeds) {
+      seed.update(gameDelta);
+    }
+
+    for (const leaf of this.leaves) {
+      leaf.update(gameDelta);
+    }
+
+    for (const smoke of this.smokes) {
+      smoke.update(gameDelta);
+    }
+
+    if (this.pyoro instanceof ClassicPyoro && this.pyoro.tongue && !this.pyoro.tongue.removed) {
+      this.pyoro.tongue.update(gameDelta);
+    }
+
+    this.scheduler.update(gameDelta);
+    this.updateAudioPlaybackRate(deltaTime);
+    this.updateMusic(deltaTime);
+
+    this.beans = this.beans.filter((bean) => !bean.removed);
+    this.angels = this.angels.filter((angel) => !angel.removed);
+    this.popups = this.popups.filter((popup) => !popup.removed);
+    this.seeds = this.seeds.filter((seed) => !seed.removed);
+    this.leaves = this.leaves.filter((leaf) => !leaf.removed);
+    this.smokes = this.smokes.filter((smoke) => !smoke.removed);
+
+    this.updateHud();
+  }
+
+  drawCenteredImage(context, image, x, y, width, height) {
+    context.drawImage(
+      image,
+      (x - width / 2) * CONFIG.unit,
+      (y - height / 2) * CONFIG.unit,
+      width * CONFIG.unit,
+      height * CONFIG.unit,
+    );
+  }
+
+  drawBackground(context) {
+    const drawLayer = (backgroundId, alpha = 1) => {
+      const image = this.assets.get(this.backgroundKey(backgroundId));
+      if (!image) {
+        return;
+      }
+
+      context.save();
+      context.globalAlpha = alpha;
+      context.drawImage(image, 0, 0, this.canvas.width, this.canvas.height);
+      context.restore();
+    };
+
+    if (this.backgroundFade) {
+      drawLayer(this.backgroundFade.fromId, 1);
+      drawLayer(this.backgroundFade.toId, clamp(this.backgroundFade.progress, 0, 1));
+      return;
+    }
+
+    drawLayer(this.currentBackgroundId, 1);
+  }
+
+  drawBlocks(context) {
+    const block = this.assets.get(`block_${this.styleType()}`);
+    if (!block) {
+      return;
+    }
+
+    const y = this.canvas.height - CONFIG.unit;
+    for (let index = 0; index < this.cases.length; index += 1) {
+      if (!this.cases[index].exists) {
+        continue;
+      }
+
+      context.drawImage(block, index * CONFIG.unit, y, CONFIG.unit, CONFIG.unit);
+    }
+  }
+
+  drawTongueBody(context) {
+    const tongue = this.pyoro instanceof ClassicPyoro ? this.pyoro.tongue : null;
+    if (!tongue || tongue.removed) {
+      return;
+    }
+
+    const style = this.styleType();
+    let insideColor = "#ff62b7";
+    let outlineColor = "#000000";
+
+    if (style === 1) {
+      insideColor = "#b2b2b2";
+    } else if (style === 2) {
+      insideColor = "#000000";
+      outlineColor = "#ffffff";
+    }
+
+    const tx1 = tongue.x - tongue.width * 0.5 * this.pyoro.direction;
+    const tx2 = tongue.x - tongue.width * 0.4 * this.pyoro.direction;
+    const px1 = this.pyoro.x + this.pyoro.width * 0.25 * this.pyoro.direction;
+    const px2 = this.pyoro.x + this.pyoro.width * 0.3125 * this.pyoro.direction;
+
+    const ty1 = tongue.y + tongue.height * 0.4;
+    const ty2 = tongue.y + tongue.height * 0.5;
+    const py1 = this.pyoro.y - this.pyoro.height * 0.125;
+    const py2 = this.pyoro.y - this.pyoro.height * 0.0625;
+
+    const points = [
+      [px1, py1],
+      [tx1, ty1],
+      [tx2, ty2],
+      [px2, py2],
+    ].map(([x, y]) => [x * CONFIG.unit + 5, y * CONFIG.unit + 5]);
+
+    context.save();
+    context.fillStyle = insideColor;
+    context.strokeStyle = outlineColor;
+    context.lineJoin = "round";
+    context.lineCap = "round";
+
+    context.beginPath();
+    context.moveTo(points[0][0], points[0][1]);
+    for (let index = 1; index < points.length; index += 1) {
+      context.lineTo(points[index][0], points[index][1]);
+    }
+    context.closePath();
+    context.fill();
+
+    context.lineWidth = Math.max(2, Math.round(CONFIG.unit * 0.12));
+    context.beginPath();
+    context.moveTo(points[0][0], points[0][1]);
+    context.lineTo(points[1][0], points[1][1]);
+    context.stroke();
+
+    context.beginPath();
+    context.moveTo(points[2][0], points[2][1]);
+    context.lineTo(points[3][0], points[3][1]);
+    context.stroke();
+    context.restore();
+  }
+
+  drawCanvasHud(context) {
+    const padding = 20;
+    const panelHeight = 56;
+    const scoreText = `Score: ${formatScore(this.score)}`;
+    const highScoreText = `High Score: ${formatScore(this.modeHighScore())}`;
+
+    context.save();
+    context.fillStyle = "rgba(10, 10, 22, 0.62)";
+    context.strokeStyle = "rgba(255, 255, 255, 0.14)";
+    context.lineWidth = 2;
+
+    context.beginPath();
+    context.roundRect(
+      padding,
+      padding,
+      this.canvas.width - padding * 2,
+      panelHeight,
+      18,
+    );
+    context.fill();
+    context.stroke();
+
+    context.font = '24px "Pyoro UI", monospace';
+    context.textBaseline = "middle";
+    context.fillStyle = "#f7f6ff";
+    context.textAlign = "left";
+    context.fillText(scoreText, padding + 18, padding + panelHeight / 2);
+    context.textAlign = "right";
+    context.fillText(highScoreText, this.canvas.width - padding - 18, padding + panelHeight / 2);
+    context.restore();
+  }
+
+  drawAiDecisionOverlay(context) {
+    if (!this.aiEnabled || !this.currentAiPolicy()) {
+      return;
+    }
+
+    const target = this.aiDiagnostics.target;
+    if (!target) {
+      return;
+    }
+
+    const agree = this.aiDiagnostics.chosenActionIndex === this.aiDiagnostics.heuristicActionIndex;
+    const color = this.aiDiagnostics.stuckRisk === "high"
+      ? "#ff7a7a"
+      : agree
+        ? "#7dff9a"
+        : "#ffd85c";
+
+    context.save();
+    context.strokeStyle = color;
+    context.fillStyle = color;
+    context.lineWidth = 3;
+    context.setLineDash([10, 8]);
+
+    if (target.targetX !== undefined) {
+      const x = target.targetX * CONFIG.unit;
+      context.beginPath();
+      context.moveTo(x, 0);
+      context.lineTo(x, this.canvas.height);
+      context.stroke();
+    }
+
+    if (target.beanX !== undefined && target.beanY !== undefined) {
+      const x = target.beanX * CONFIG.unit;
+      const y = target.beanY * CONFIG.unit;
+      context.beginPath();
+      context.arc(x, y, Math.max(10, CONFIG.unit * 0.45), 0, Math.PI * 2);
+      context.stroke();
+    }
+
+    context.setLineDash([]);
+    context.font = '18px "Pyoro UI", monospace';
+    context.textAlign = "left";
+    context.textBaseline = "top";
+    context.fillText(
+      `${actionLabelForIndex(this.aiDiagnostics.chosenActionIndex)} ${Math.round(this.aiDiagnostics.confidence * 100)}%`,
+      24,
+      88,
+    );
+    context.restore();
+  }
+
+  render() {
+    if (!this.context) {
+      return;
+    }
+
+    this.context.clearRect(0, 0, this.canvas.width, this.canvas.height);
+    this.drawBackground(this.context);
+    this.drawBlocks(this.context);
+    this.drawTongueBody(this.context);
+
+    for (const leaf of this.leaves) {
+      leaf.draw(this.context);
+    }
+
+    for (const bean of this.beans) {
+      bean.draw(this.context);
+    }
+
+    this.pyoro.draw(this.context);
+
+    if (this.pyoro instanceof ClassicPyoro && this.pyoro.tongue && !this.pyoro.tongue.removed) {
+      this.pyoro.tongue.draw(this.context);
+    }
+
+    for (const angel of this.angels) {
+      angel.draw(this.context);
+    }
+
+    for (const smoke of this.smokes) {
+      smoke.draw(this.context);
+    }
+
+    for (const seed of this.seeds) {
+      seed.draw(this.context);
+    }
+
+    for (const popup of this.popups) {
+      popup.draw(this.context);
+    }
+
+    this.drawAiDecisionOverlay(this.context);
+    this.drawCanvasHud(this.context);
+  }
+
+  updateHud() {
+    this.scoreValue.textContent = formatScore(this.score);
+    this.highScoreValue.textContent = formatScore(this.modeHighScore());
+    this.modeValue.textContent = this.currentMode().label;
+    this.holesValue.textContent = String(this.cases.filter((tile) => !tile.exists).length);
+    this.speedValue.textContent = `${this.speed.toFixed(2)}x`;
+
+    if (!this.started) {
+      this.statusValue.textContent = "Ready";
+    } else if (this.gameOver) {
+      this.statusValue.textContent = "Game Over";
+    } else if (this.paused) {
+      this.statusValue.textContent = "Paused";
+    } else if (this.running) {
+      this.statusValue.textContent = "Running";
+    } else {
+      this.statusValue.textContent = "Waiting";
+    }
+
+    this.pauseButton.disabled = !this.started || this.gameOver;
+    this.pauseButton.textContent = this.paused ? "Resume" : "Pause";
+    this.updateAiDiagnosticsUi();
+  }
+
+  driveAiController() {
+    if (!this.aiEnabled || !this.canControlPlayer()) {
+      return;
+    }
+
+    const policy = this.currentAiPolicy();
+    if (!policy) {
+      return;
+    }
+
+    const observation = this.buildPolicyObservation();
+    const logits = inferPolicyLogits(policy, observation);
+    const probabilities = softmax(logits);
+    let actionIndex = 0;
+    for (let index = 1; index < logits.length; index += 1) {
+      if (logits[index] > logits[actionIndex]) {
+        actionIndex = index;
+      }
+    }
+
+    this.recordAiDecision(actionIndex, probabilities, heuristicDecisionForGame(this));
+    this.applyDiscreteAction(actionIndex);
+  }
+
+  runFixedStep(actionIndex = null, deltaTime = this.fixedStep) {
+    if (actionIndex !== null) {
+      this.applyDiscreteAction(actionIndex);
+    } else {
+      this.driveAiController();
+    }
+
+    if (this.running) {
+      this.update(deltaTime);
+    }
+
+    return this.buildPolicyObservation();
+  }
+
+  loop(timestamp) {
+    if (this.lastTimestamp === null) {
+      this.lastTimestamp = timestamp;
+    }
+
+    const deltaTime = Math.min((timestamp - this.lastTimestamp) / 1000, CONFIG.maxFrameDelta);
+    this.lastTimestamp = timestamp;
+
+    if (this.running) {
+      this.frameAccumulator += deltaTime;
+      let subSteps = 0;
+      while (this.frameAccumulator >= this.fixedStep && subSteps < this.maxSubSteps) {
+        this.runFixedStep(null, this.fixedStep);
+        this.frameAccumulator -= this.fixedStep;
+        subSteps += 1;
+      }
+
+      if (subSteps >= this.maxSubSteps) {
+        this.frameAccumulator = 0;
+      }
+    } else {
+      this.frameAccumulator = 0;
+    }
+
+    this.render();
+    if (!this.headless) {
+      window.requestAnimationFrame(this.loop);
+    }
+  }
+}
+
+const shouldAutoBoot = typeof document !== "undefined" && Boolean(document.getElementById("gameCanvas"));
+
+if (shouldAutoBoot) {
+  const game = new PyoroWebGame();
+  void game.init();
+}
+
+export {
+  CONFIG,
+  GAME_MODES,
+  PyoroWebGame,
+};
