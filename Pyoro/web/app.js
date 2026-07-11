@@ -313,6 +313,7 @@ function defaultSaveState() {
     soundEnabled: false,
     musicEnabled: false,
     stretchFullscreen: false,
+    uiPanelOpen: false,
     highScores: {
       pyoro1: 0,
       pyoro2: 0,
@@ -344,6 +345,7 @@ function sanitizeSaveState(raw) {
     soundEnabled: Boolean(raw?.soundEnabled),
     musicEnabled: Boolean(raw?.musicEnabled),
     stretchFullscreen: Boolean(raw?.stretchFullscreen ?? raw?.stretchToFill),
+    uiPanelOpen: Boolean(raw?.uiPanelOpen),
     highScores: {
       pyoro1: pyoro1HighScore,
       pyoro2: pyoro2HighScore,
@@ -2310,6 +2312,8 @@ class PyoroWebGame {
     this.stretchButton = this.headless ? createStubElement() : document.getElementById("stretchButton");
     this.modeClassicButton = this.headless ? createStubElement() : document.getElementById("modeClassicButton");
     this.modeAdvancedButton = this.headless ? createStubElement() : document.getElementById("modeAdvancedButton");
+    this.uiPanel = this.headless ? createStubElement() : document.getElementById("uiPanel");
+    this.uiToggleButton = this.headless ? createStubElement() : document.getElementById("uiToggleButton");
 
     this.scoreValue = this.headless ? createStubElement() : document.getElementById("scoreValue");
     this.highScoreValue = this.headless ? createStubElement() : document.getElementById("highScoreValue");
@@ -2322,6 +2326,7 @@ class PyoroWebGame {
     this.abilityDescription = this.headless ? createStubElement() : document.getElementById("abilityDescription");
     this.abilityScoring = this.headless ? createStubElement() : document.getElementById("abilityScoring");
     this.abilityRisk = this.headless ? createStubElement() : document.getElementById("abilityRisk");
+    this.aiDiagnosticsCard = this.headless ? createStubElement() : document.getElementById("aiDiagnosticsCard");
     this.aiDebugStatus = this.headless ? createStubElement() : document.getElementById("aiDebugStatus");
     this.aiDebugModel = this.headless ? createStubElement() : document.getElementById("aiDebugModel");
     this.aiDebugAction = this.headless ? createStubElement() : document.getElementById("aiDebugAction");
@@ -2667,6 +2672,7 @@ class PyoroWebGame {
 
     this.bindUi();
     this.applyStretchPreference();
+    this.applyUiPanelPreference();
     this.syncSoundButton();
     this.syncMusicButton();
     this.syncStretchButton();
@@ -2772,6 +2778,10 @@ class PyoroWebGame {
       this.toggleStretchFullscreen();
     });
 
+    this.uiToggleButton.addEventListener("click", () => {
+      this.toggleUiPanel();
+    });
+
     this.modeClassicButton.addEventListener("click", () => {
       this.handleModeSelection(0);
     });
@@ -2847,6 +2857,11 @@ class PyoroWebGame {
 
       if (event.code === "KeyF") {
         this.toggleFullscreen();
+        return;
+      }
+
+      if (event.code === "KeyM") {
+        this.toggleUiPanel();
       }
     });
 
@@ -3141,6 +3156,10 @@ class PyoroWebGame {
     }
 
     const state = this.currentAiLoadState(this.selectedMode);
+    const unavailable = state.status === "unavailable";
+    this.aiButton.classList.toggle("hidden", unavailable);
+    this.aiDiagnosticsCard?.classList.toggle("hidden", unavailable);
+
     if (state.status === "ready") {
       this.aiButton.disabled = false;
       this.aiButton.textContent = this.aiEnabled ? "AI: On" : "AI: Off";
@@ -3150,9 +3169,7 @@ class PyoroWebGame {
 
     this.aiButton.disabled = true;
     this.aiButton.setAttribute("aria-pressed", "false");
-    this.aiButton.textContent = state.status === "loading" || state.status === "idle"
-      ? "AI: Loading..."
-      : "AI: Unavailable";
+    this.aiButton.textContent = "AI: Loading...";
   }
 
   async loadAiPolicy(modeId = this.selectedMode) {
@@ -3170,6 +3187,9 @@ class PyoroWebGame {
 
     const path = this.aiModelPath(modeId);
     if (!path) {
+      console.warn(
+        `[Pyoro Web] AI unavailable for ${GAME_MODES[modeId]?.key ?? modeId}: no model path configured. AI controls stay hidden.`,
+      );
       this.aiLoadStates.set(modeId, {
         status: "unavailable",
         policy: null,
@@ -3202,7 +3222,11 @@ class PyoroWebGame {
         this.syncAiButton();
         return model;
       })
-      .catch((_error) => {
+      .catch((error) => {
+        console.warn(
+          `[Pyoro Web] AI unavailable for ${GAME_MODES[modeId].key}: could not load model from ${path}. AI controls stay hidden.`,
+          error,
+        );
         this.aiPolicies.delete(modeId);
         this.aiLoadStates.set(modeId, {
           status: "unavailable",
@@ -3270,6 +3294,18 @@ class PyoroWebGame {
     }
 
     this.canvasFrame.classList.toggle("stretch-fullscreen", Boolean(this.save.stretchFullscreen));
+  }
+
+  applyUiPanelPreference() {
+    const open = Boolean(this.save.uiPanelOpen);
+    this.uiPanel.classList.toggle("hidden", !open);
+    this.uiToggleButton.setAttribute("aria-expanded", open ? "true" : "false");
+  }
+
+  toggleUiPanel() {
+    this.save.uiPanelOpen = !this.save.uiPanelOpen;
+    writeSaveState(this.save);
+    this.applyUiPanelPreference();
   }
 
   syncStretchButton() {
@@ -3555,7 +3591,7 @@ class PyoroWebGame {
 
     this.showOverlay(
       `${mode.label} Mode`,
-      `${mode.description} ${modeSpecificLine}`,
+      `${mode.description} ${modeSpecificLine} Open the corner menu (M) for modes, settings, and help.`,
       "Start Game",
     );
   }
@@ -4215,34 +4251,24 @@ class PyoroWebGame {
   }
 
   drawCanvasHud(context) {
-    const padding = 20;
-    const panelHeight = 56;
+    // Match the original's minimal presentation: plain outlined text
+    // instead of a UI panel over the playfield.
     const scoreText = `Score: ${formatScore(this.score)}`;
     const highScoreText = `High Score: ${formatScore(this.modeHighScore())}`;
 
     context.save();
-    context.fillStyle = "rgba(10, 10, 22, 0.62)";
-    context.strokeStyle = "rgba(255, 255, 255, 0.14)";
-    context.lineWidth = 2;
-
-    context.beginPath();
-    context.roundRect(
-      padding,
-      padding,
-      this.canvas.width - padding * 2,
-      panelHeight,
-      18,
-    );
-    context.fill();
-    context.stroke();
-
-    context.font = '24px "Pyoro UI", monospace';
-    context.textBaseline = "middle";
-    context.fillStyle = "#f7f6ff";
+    context.font = '26px "Pyoro UI", monospace';
+    context.textBaseline = "top";
+    context.lineJoin = "round";
+    context.lineWidth = 5;
+    context.strokeStyle = "rgba(0, 0, 0, 0.7)";
+    context.fillStyle = "#ffffff";
     context.textAlign = "left";
-    context.fillText(scoreText, padding + 18, padding + panelHeight / 2);
+    context.strokeText(scoreText, 18, 14);
+    context.fillText(scoreText, 18, 14);
     context.textAlign = "right";
-    context.fillText(highScoreText, this.canvas.width - padding - 18, padding + panelHeight / 2);
+    context.strokeText(highScoreText, this.canvas.width - 18, 14);
+    context.fillText(highScoreText, this.canvas.width - 18, 14);
     context.restore();
   }
 

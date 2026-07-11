@@ -46,7 +46,8 @@ body {
 .topbar {
   display: grid;
   gap: 16px;
-  align-items: end;
+  justify-items: center;
+  margin-bottom: 14px;
 }
 
 .branding {
@@ -55,14 +56,8 @@ body {
 }
 
 .title-image {
-  width: min(100%, 460px);
+  width: min(100%, 380px);
   image-rendering: pixelated;
-}
-
-.subtitle {
-  margin: 0;
-  color: var(--text-dim);
-  letter-spacing: 0.04em;
 }
 
 .status-panel {
@@ -96,13 +91,45 @@ body {
   display: flex;
   flex-wrap: wrap;
   gap: 10px;
-  margin: 18px 0 16px;
+}
+
+.ui-panel {
+  display: grid;
+  gap: 16px;
+  margin-top: 16px;
+}
+
+.ui-toggle {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  z-index: 6;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  background: rgba(12, 12, 26, 0.55);
+  font-size: 1.1rem;
+  line-height: 1;
+  box-shadow: none;
+  opacity: 0.75;
+}
+
+.ui-toggle:hover:not(:disabled) {
+  transform: none;
+  opacity: 1;
+  background: rgba(12, 12, 26, 0.8);
+}
+
+.canvas-frame:fullscreen .ui-toggle,
+.canvas-frame:-webkit-full-screen .ui-toggle {
+  display: none;
 }
 
 .mode-strip {
   display: grid;
   gap: 10px;
-  margin-top: 18px;
 }
 
 .mode-picker {
@@ -219,6 +246,10 @@ button:disabled {
   display: none;
 }
 
+.hidden {
+  display: none !important;
+}
+
 .overlay-card {
   width: min(92%, 420px);
   padding: 24px;
@@ -244,7 +275,6 @@ button:disabled {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
   gap: 14px;
-  margin-top: 16px;
 }
 
 .help-card {
@@ -308,6 +338,34 @@ code {
 
 .touch-button {
   border-radius: 14px;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* Slim always-available control bar for touch devices, so the game is
+   playable without opening the menu panel. Hidden on hover-capable
+   (mouse/trackpad) devices. */
+.touch-bar {
+  display: none;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.touch-bar .touch-button {
+  flex: 1;
+  padding: 16px 0;
+  font-size: 1.05rem;
+}
+
+.touch-bar .touch-button.pause {
+  flex: 0.6;
+}
+
+@media (hover: none) and (pointer: coarse) {
+  .touch-bar {
+    display: flex;
+  }
 }
 
 .touch-button.action {
@@ -316,12 +374,6 @@ code {
 
 .touch-button.pause {
   background: linear-gradient(180deg, #57717d, #405059);
-}
-
-@media (min-width: 980px) {
-  .topbar {
-    grid-template-columns: minmax(0, 1fr) minmax(460px, 560px);
-  }
 }
 
 @media (max-width: 720px) {
