@@ -3296,6 +3296,14 @@ class PyoroWebGame {
     return this.highScores[GAME_MODES[modeId].key] || 0;
   }
 
+  displayedHighScore(modeId = this.selectedMode) {
+    const savedHighScore = this.modeHighScore(modeId);
+    const isCurrentActiveRun = this.started
+      && !this.mainMenu
+      && modeId === this.selectedMode;
+    return isCurrentActiveRun ? Math.max(savedHighScore, this.score) : savedHighScore;
+  }
+
   isModeUnlocked(modeId) {
     return modeId === 0 || modeId === 1;
   }
@@ -4440,7 +4448,7 @@ class PyoroWebGame {
     // layout template's positions (score centered at 25% width, high score
     // at 75%, near the top edge).
     const scoreText = `Score: ${formatScore(this.score)}`;
-    const highScoreText = `High Score: ${formatScore(this.modeHighScore())}`;
+    const highScoreText = `High Score: ${formatScore(this.displayedHighScore())}`;
     const y = Math.round(this.canvas.height * 0.05);
 
     context.save();
@@ -4509,7 +4517,7 @@ class PyoroWebGame {
 
   updateHud() {
     this.scoreValue.textContent = formatScore(this.score);
-    this.highScoreValue.textContent = formatScore(this.modeHighScore());
+    this.highScoreValue.textContent = formatScore(this.displayedHighScore());
     this.modeValue.textContent = this.currentMode().label;
     this.holesValue.textContent = String(this.cases.filter((tile) => !tile.exists).length);
     this.speedValue.textContent = `${this.speed.toFixed(2)}x`;

@@ -8,6 +8,7 @@
     "start": "npm --prefix Pyoro run start --",
     "check": "npm --prefix Pyoro run check",
     "train:agent": "npm --prefix Pyoro run train:agent --",
-    "evaluate:agent": "npm --prefix Pyoro run evaluate:agent --"
+    "evaluate:agent": "npm --prefix Pyoro run evaluate:agent --",
+    "evaluate:heuristic": "node Pyoro/scripts/evaluate-heuristic.mjs"
   }
 }

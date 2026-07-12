@@ -9,6 +9,7 @@
     "start": "node scripts/dev-server.mjs",
     "check": "node scripts/check.mjs",
     "train:agent": "node scripts/train-agent.mjs",
-    "evaluate:agent": "node scripts/evaluate-agent.mjs"
+    "evaluate:agent": "node scripts/evaluate-agent.mjs",
+    "evaluate:heuristic": "node scripts/evaluate-heuristic.mjs"
   }
 }

@@ -8,6 +8,7 @@ const filesToCheck = [
   "scripts/dev-server.mjs",
   "scripts/train-agent.mjs",
   "scripts/evaluate-agent.mjs",
+  "scripts/evaluate-heuristic.mjs",
 ];
 
 for (const filePath of filesToCheck) {

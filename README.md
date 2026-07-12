@@ -81,6 +81,22 @@ npm run evaluate:agent -- --mode pyoro2
 
 Evaluates a trained agent model against the same headless environment.
 
+```bash
+npm run evaluate:heuristic
+```
+
+Evaluates the heuristic used by the browser's Auto Player over deterministic
+seeded games. The default run disables the no-score timeout, allows up to
+`120000` simulation steps per game, and reports score distribution plus the
+rate of games that clear `5000`. To customize it from the repository root,
+invoke the script directly, for example:
+
+```bash
+node Pyoro/scripts/evaluate-heuristic.mjs --mode pyoro1 --episodes 5 --max-steps 30000
+```
+
+It also accepts `--target-score`, `--seed`, and `--max-no-score-steps`.
+
 ## Browser Game Features
 
 - Browser-native standalone implementation using `canvas`
@@ -104,6 +120,7 @@ Evaluates a trained agent model against the same headless environment.
 - `scripts/check.mjs`: syntax checks for the web-first project
 - `scripts/train-agent.mjs`: offline policy-gradient training script
 - `scripts/evaluate-agent.mjs`: offline evaluation script
+- `scripts/evaluate-heuristic.mjs`: seeded Auto Player evaluation script
 - `src/data`: game assets (sprites, audio, font) from the original Pyoro project
 
 ## AI Agents
