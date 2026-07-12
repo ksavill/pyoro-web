@@ -520,6 +520,10 @@ class SilentProceduralSfxBank {
     return false;
   }
 
+  playAngelChime() {
+    return false;
+  }
+
   playBuffer() {
     return false;
   }
@@ -1181,6 +1185,52 @@ class ProceduralSfxBank {
     return true;
   }
 
+  playAngelChime(playbackRate = 1) {
+    if (!this.enabled) {
+      return false;
+    }
+
+    const context = this.ensureContext();
+    if (!context || !this.masterGain) {
+      return false;
+    }
+
+    const schedule = () => {
+      // A soft ascending harp-like arpeggio for the angel placing a block.
+      const rate = clamp(playbackRate, 0.8, 2);
+      const start = context.currentTime;
+      const notes = [880, 1108.73, 1318.51, 1760];
+
+      notes.forEach((frequency, index) => {
+        const noteStart = start + index * 0.07;
+        const tone = context.createOscillator();
+        const toneGain = context.createGain();
+
+        tone.type = "triangle";
+        tone.frequency.setValueAtTime(frequency * rate, noteStart);
+        toneGain.gain.setValueAtTime(0.0001, noteStart);
+        toneGain.gain.exponentialRampToValueAtTime(0.32, noteStart + 0.012);
+        toneGain.gain.exponentialRampToValueAtTime(0.0001, noteStart + 0.24);
+        tone.connect(toneGain);
+        toneGain.connect(this.masterGain);
+        tone.onended = () => {
+          tone.disconnect();
+          toneGain.disconnect();
+        };
+        tone.start(noteStart);
+        tone.stop(noteStart + 0.26);
+      });
+    };
+
+    if (context.state === "running") {
+      schedule();
+      return true;
+    }
+
+    context.resume().then(schedule).catch(() => {});
+    return true;
+  }
+
   playBuffer(name, options = {}) {
     if (!this.enabled) {
       return false;
@@ -1596,9 +1646,10 @@ class Angel extends Entity {
     this.tileIndex = tileIndex;
     this.spriteFrame = 0;
     this.spriteTimer = 0;
-    // The chime is only 0.45s; cutting it off on landing (like the Python
-    // original does) made block drops effectively silent, so let it ring out.
-    this.game.playSound("angel_down");
+    // A soft multi-note chime like the DSi original; the bundled
+    // angel_down.wav is a single quiet blip that never read as the
+    // block-drop sound.
+    this.game.playAngelChime();
   }
 
   update(deltaTime) {
@@ -1768,7 +1819,9 @@ class Seed extends Entity {
       return;
     }
 
-    this.game.drawCenteredImage(context, image, this.x, this.y, this.width, this.height);
+    // Rendered as the original's tiny seed dot; the entity keeps a larger
+    // hitbox so the fast pellet still connects fairly.
+    this.game.drawCenteredImage(context, image, this.x, this.y, 0.1875, 0.1875);
   }
 }
 
@@ -2639,7 +2692,6 @@ class PyoroWebGame {
         this.proceduralSfx.preload({
           bean_cut: SOUND_MANIFEST.bean_cut,
           pyoro_move: SOUND_MANIFEST.pyoro_move,
-          angel_down: SOUND_MANIFEST.angel_down,
         }),
         // Canvas text does not trigger @font-face loading on its own, so the
         // game font must be ready before the menu first draws.
@@ -3524,13 +3576,9 @@ class PyoroWebGame {
   }
 
   playSound(name, options) {
-    // Some source WAVs need a gain boost beyond HTMLAudio's 1.0 volume cap,
-    // so they route through the WebAudio bank (master gain 0.18):
-    // bean_cut is near full scale, angel_down peaks at only 0.185.
-    const boostedGain = name === "bean_cut" ? 5 : name === "angel_down" ? 25 : null;
-    if (boostedGain !== null) {
-      const played = this.proceduralSfx.playBuffer(name, {
-        gain: options?.gain ?? boostedGain,
+    if (name === "bean_cut") {
+      const played = this.proceduralSfx.playBuffer("bean_cut", {
+        gain: options?.gain ?? 5,
         playbackRate: options?.playbackRate ?? this.musicPlaybackRate,
       });
       if (played) {
@@ -3542,6 +3590,10 @@ class PyoroWebGame {
       ...options,
       playbackRate: options?.playbackRate ?? this.musicPlaybackRate,
     });
+  }
+
+  playAngelChime() {
+    return this.proceduralSfx.playAngelChime(1);
   }
 
   playPyoro2Shoot() {
