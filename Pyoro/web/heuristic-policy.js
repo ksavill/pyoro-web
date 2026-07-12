@@ -29,11 +29,15 @@ function chooseFallbackTargetBean(game) {
     return null;
   }
 
-  let bestBean = beans[0];
+  let bestBean = null;
   let bestScore = Number.NEGATIVE_INFINITY;
   const floorDamage = game.holeCount() / Math.max(game.cases.length, 1);
 
   for (const bean of beans) {
+    if (player.y - bean.y < 3) {
+      continue;
+    }
+
     const urgency = bean.y / 18;
     const lateralDistance = Math.abs(bean.x - player.x) / 32;
     const typeBonus = bean.type === "super"
@@ -162,8 +166,79 @@ function heuristicPyoro2Decision(game) {
     };
   }
 
+  // A seed cannot hit a bean falling straight onto the bird (it spawns
+  // beside the beak and flies away diagonally), so nearby overhead beans
+  // must be dodged instead of shot.
+  let threat = null;
+  for (const bean of game.activeBeans()) {
+    const lateral = Math.abs(bean.x - player.x);
+    const above = player.y - bean.y;
+    if (lateral < 2.2 && above > -1 && above < 5) {
+      if (!threat || bean.y > threat.y) {
+        threat = bean;
+      }
+    }
+  }
+
+  if (threat) {
+    let away = threat.x >= player.x ? -1 : 1;
+    // Dodge toward a side that actually has room to clear the bean;
+    // sprinting past it beats being cornered against a wall.
+    const minX = player.width / 2;
+    const maxX = game.cases.length - player.width / 2;
+    const clearance = 2.3;
+    const canEscape = (dir) => (dir === -1
+      ? threat.x - clearance >= minX
+      : threat.x + clearance <= maxX);
+    if (!canEscape(away) && canEscape(-away)) {
+      away = -away;
+    }
+    const actionIndex = discreteActionForDirection(away, false);
+    return {
+      actionIndex,
+      action: actionForIndex(actionIndex),
+      reason: "dodge_bean",
+      target: {
+        beanType: threat.type,
+        beanX: threat.x,
+        beanY: threat.y,
+        direction: away,
+      },
+    };
+  }
+
   const direction = targetDirection(player, targetBean);
-  const deltaX = targetBean.x - player.x;
+  // The seed travels the 45-degree diagonal, so the bird must stand where
+  // that diagonal passes through the bean instead of underneath it.
+  const interceptX = targetBean.x - direction * (player.y - targetBean.y);
+  const deltaX = interceptX - player.x;
+  const target = {
+    beanType: targetBean.type,
+    beanX: targetBean.x,
+    beanY: targetBean.y,
+    direction,
+    targetX: interceptX,
+  };
+
+  if (Math.abs(deltaX) > 0.6) {
+    const actionIndex = discreteActionForDirection(deltaX < 0 ? -1 : 1, false);
+    return {
+      actionIndex,
+      action: actionForIndex(actionIndex),
+      reason: "move_to_intercept",
+      target,
+    };
+  }
+
+  if (player.direction === direction && player.isShootingEntity(targetBean)) {
+    const actionIndex = discreteActionForDirection(0, true);
+    return {
+      actionIndex,
+      action: actionForIndex(actionIndex),
+      reason: "shoot_target",
+      target,
+    };
+  }
 
   if (player.direction !== direction) {
     const actionIndex = discreteActionForDirection(direction, false);
@@ -171,42 +246,7 @@ function heuristicPyoro2Decision(game) {
       actionIndex,
       action: actionForIndex(actionIndex),
       reason: "face_target",
-      target: {
-        beanType: targetBean.type,
-        beanX: targetBean.x,
-        beanY: targetBean.y,
-        direction,
-      },
-    };
-  }
-
-  if (player.isShootingEntity(targetBean)) {
-    const actionIndex = discreteActionForDirection(0, true);
-    return {
-      actionIndex,
-      action: actionForIndex(actionIndex),
-      reason: "shoot_target",
-      target: {
-        beanType: targetBean.type,
-        beanX: targetBean.x,
-        beanY: targetBean.y,
-        direction,
-      },
-    };
-  }
-
-  if (Math.abs(deltaX) > 0.75) {
-    const actionIndex = discreteActionForDirection(deltaX < 0 ? -1 : 1, false);
-    return {
-      actionIndex,
-      action: actionForIndex(actionIndex),
-      reason: "move_under_target",
-      target: {
-        beanType: targetBean.type,
-        beanX: targetBean.x,
-        beanY: targetBean.y,
-        direction,
-      },
+      target,
     };
   }
 
@@ -214,12 +254,7 @@ function heuristicPyoro2Decision(game) {
     actionIndex: 0,
     action: actionForIndex(0),
     reason: "wait_for_alignment",
-    target: {
-      beanType: targetBean.type,
-      beanX: targetBean.x,
-      beanY: targetBean.y,
-      direction,
-    },
+    target,
   };
 }
 

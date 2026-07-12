@@ -22,7 +22,6 @@ const CONFIG = Object.freeze({
   angelSpriteDuration: 0.5,
   seedSpeed: 45,
   airResistance: 25,
-  gravityForce: 9.81,
   leafSpeed: 1.5,
   leafSpriteDuration: 0.2,
   leafWindSpeed: 15,
@@ -50,9 +49,9 @@ const GAME_MODES = Object.freeze([
     key: "pyoro2",
     label: "Pyoro 2",
     backgroundSet: 2,
-    description: "Shoot diagonally to slice beans out of the air instead of using a tongue.",
+    description: "Spit a seed diagonally to pop beans out of the air instead of using a tongue.",
     scoring:
-      "Cutting 1, 2, 3, or 4+ beans in one shot scores 50, 100, 300, or 1000 points for each bean hit.",
+      "Each extra bean popped by the same seed is worth more: 50, 100, 300, then 1000 points.",
     risk: "Pink and super beans still keep their repair and chain-reaction effects, but dropped beans can still destroy the floor or hit Pyoro.",
   },
 ]);
@@ -1595,7 +1594,9 @@ class Angel extends Entity {
     this.tileIndex = tileIndex;
     this.spriteFrame = 0;
     this.spriteTimer = 0;
-    this.sound = this.game.playSound("angel_down");
+    // The chime is only 0.45s; cutting it off on landing (like the Python
+    // original does) made block drops effectively silent, so let it ring out.
+    this.game.playSound("angel_down");
   }
 
   update(deltaTime) {
@@ -1611,11 +1612,6 @@ class Angel extends Entity {
     if (tile.isRepairing && this.hitsFloor()) {
       tile.isRepairing = false;
       tile.exists = true;
-
-      if (this.sound) {
-        this.game.audio.stop(this.sound);
-        this.sound = null;
-      }
     }
 
     if (this.isOutOfBounds()) {
@@ -1710,31 +1706,56 @@ class ScorePopup {
   }
 }
 
+// Pyoro 2's projectile: a single seed pellet that flies diagonally upward
+// and pops every bean it touches on the way. Each successive bean hit by
+// the same seed is worth more points.
 class Seed extends Entity {
-  constructor(game, angle, direction) {
+  constructor(game, direction) {
     const player = game.pyoro;
-    const radians = (angle * Math.PI) / 180;
-    const x = player.x + (player.width / 2 + 0.0625) * direction;
-    const y = player.y - player.height / 2 + 0.0625;
+    const x = player.x + (player.width / 2 + 0.3) * direction;
+    const y = player.y - player.height / 2 + 0.3;
 
-    super(game, x, y, 0.125, 0.125);
+    super(game, x, y, 0.5, 0.5);
     this.direction = direction;
-    this.alpha = 255;
-    this.velocity = {
-      x: Math.cos(radians) * direction * CONFIG.seedSpeed,
-      y: -Math.sin(radians) * CONFIG.seedSpeed,
-    };
+    this.hitCount = 0;
+    this.hitLeaves = new Set();
   }
 
   update(deltaTime) {
-    this.velocity.x -= CONFIG.airResistance * this.direction * deltaTime;
-    this.velocity.y += CONFIG.gravityForce * deltaTime;
+    this.x += CONFIG.seedSpeed * this.direction * deltaTime;
+    this.y -= CONFIG.seedSpeed * deltaTime;
 
-    this.x += this.velocity.x * deltaTime;
-    this.y += this.velocity.y * deltaTime;
-    this.alpha -= 64 * deltaTime;
+    for (const bean of this.game.beans) {
+      if (bean.removed || bean.caught) {
+        continue;
+      }
 
-    if (this.alpha <= 0 || this.isOutOfBounds()) {
+      if (this.intersects(bean)) {
+        this.hitCount += 1;
+        bean.cut();
+        bean.catch();
+        bean.remove();
+        this.game.addScore(this.game.comboScore(this.hitCount), bean.x, bean.y);
+      }
+    }
+
+    for (const leaf of this.game.leaves) {
+      if (leaf.removed || this.hitLeaves.has(leaf)) {
+        continue;
+      }
+
+      if (this.intersects(leaf)) {
+        this.hitLeaves.add(leaf);
+        leaf.cut();
+        if (this.direction === 1) {
+          leaf.setRightWind();
+        } else {
+          leaf.setLeftWind();
+        }
+      }
+    }
+
+    if (this.isOutOfBounds()) {
       this.remove();
     }
   }
@@ -1745,10 +1766,7 @@ class Seed extends Entity {
       return;
     }
 
-    context.save();
-    context.globalAlpha = clamp(this.alpha / 255, 0, 1);
     this.game.drawCenteredImage(context, image, this.x, this.y, this.width, this.height);
-    context.restore();
   }
 }
 
@@ -2201,43 +2219,7 @@ class Pyoro2 extends PlayerBase {
     this.game.playPyoro2Shoot();
     this.shootFrame = 1;
     this.shootAccumulator = 0;
-
-    const hits = [];
-
-    for (const bean of this.game.beans) {
-      if (bean.removed || bean.caught) {
-        continue;
-      }
-
-      if (this.isShootingEntity(bean)) {
-        bean.cut();
-        bean.catch();
-        bean.remove();
-        hits.push({ x: bean.x, y: bean.y });
-      }
-    }
-
-    for (const leaf of this.game.leaves) {
-      if (leaf.removed) {
-        continue;
-      }
-
-      if (this.isShootingEntity(leaf)) {
-        leaf.cut();
-        if (this.direction === 1) {
-          leaf.setRightWind();
-        } else {
-          leaf.setLeftWind();
-        }
-      }
-    }
-
-    const score = this.game.comboScore(hits.length);
-    for (const hit of hits) {
-      this.game.addScore(score, hit.x, hit.y);
-    }
-
-    this.game.spawnSeeds(this.direction);
+    this.game.spawnSeed(this.direction);
   }
 
   recallAbility() {}
@@ -2477,6 +2459,12 @@ class PyoroWebGame {
     let bestTarget = null;
 
     for (const bean of this.activeBeans()) {
+      // A bean this low can no longer be intercepted by a seed without
+      // walking into it; it is a hazard, not a target.
+      if (player.y - bean.y < 3) {
+        continue;
+      }
+
       const direction = bean.x >= player.x ? 1 : -1;
       const aligned = player.direction === direction && player.isShootingEntity(bean);
       const urgency = bean.y / CONFIG.worldHeight;
@@ -2649,6 +2637,7 @@ class PyoroWebGame {
         this.proceduralSfx.preload({
           bean_cut: SOUND_MANIFEST.bean_cut,
           pyoro_move: SOUND_MANIFEST.pyoro_move,
+          angel_down: SOUND_MANIFEST.angel_down,
         }),
         // Canvas text does not trigger @font-face loading on its own, so the
         // game font must be ready before the menu first draws.
@@ -3301,7 +3290,7 @@ class PyoroWebGame {
       ? (
         "Catch falling beans with your tongue. Pyoro 2 is always available from the mode selector."
       )
-      : "Shoot diagonally to cut beans out of the air. Multi-bean shots award the same combo score to each bean hit.";
+      : "Spit seeds diagonally to pop beans. One seed can pass through several beans for escalating combo points.";
 
     this.abilityTitle.textContent = `${mode.label} Ability`;
     this.abilityDescription.textContent = mode.description;
@@ -3533,9 +3522,13 @@ class PyoroWebGame {
   }
 
   playSound(name, options) {
-    if (name === "bean_cut") {
-      const played = this.proceduralSfx.playBuffer("bean_cut", {
-        gain: options?.gain ?? 5,
+    // Some source WAVs need a gain boost beyond HTMLAudio's 1.0 volume cap,
+    // so they route through the WebAudio bank (master gain 0.18):
+    // bean_cut is near full scale, angel_down peaks at only 0.185.
+    const boostedGain = name === "bean_cut" ? 5 : name === "angel_down" ? 25 : null;
+    if (boostedGain !== null) {
+      const played = this.proceduralSfx.playBuffer(name, {
+        gain: options?.gain ?? boostedGain,
         playbackRate: options?.playbackRate ?? this.musicPlaybackRate,
       });
       if (played) {
@@ -3792,9 +3785,8 @@ class PyoroWebGame {
     });
   }
 
-  spawnSeeds(direction) {
-    this.seeds.push(new Seed(this, 35, direction));
-    this.seeds.push(new Seed(this, 55, direction));
+  spawnSeed(direction) {
+    this.seeds.push(new Seed(this, direction));
   }
 
   spawnSmoke(x, y) {
