@@ -49,14 +49,22 @@ body {
   gap: 12px;
 }
 
+/* Panel chrome drawn with the game's frame.png nine-patch. */
+.game-frame,
+.metric,
+.help-card {
+  border: 10px solid transparent;
+  border-image: url("../src/data/images/gui/frame.png") 5 fill stretch;
+  image-rendering: pixelated;
+  border-radius: 0;
+  background: none;
+  box-shadow: none;
+}
+
 .metric {
   display: grid;
   gap: 4px;
-  padding: 12px 14px;
-  background: var(--panel);
-  border: 1px solid var(--panel-border);
-  border-radius: 14px;
-  box-shadow: 0 12px 28px var(--shadow);
+  padding: 8px 10px;
 }
 
 .metric-wide {
@@ -145,12 +153,10 @@ body {
 
 .mode-button {
   min-width: 148px;
-  background: linear-gradient(180deg, #3a4267, #28314c);
 }
 
 .mode-button.active {
-  background: linear-gradient(180deg, #ffdb72, #d2a92a);
-  color: #1d1830;
+  color: var(--accent);
 }
 
 .mode-hint {
@@ -159,35 +165,34 @@ body {
   line-height: 1.5;
 }
 
+/* Buttons use the game's own button sprites. */
 button {
   appearance: none;
   border: 0;
-  border-radius: 999px;
-  padding: 12px 18px;
-  color: var(--text);
-  background: linear-gradient(180deg, var(--button-hover), var(--button));
-  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.28);
+  border-radius: 0;
+  padding: 12px 22px;
+  color: #ffffff;
+  background: url("../src/data/images/gui/button/button.png");
+  background-size: 100% 100%;
+  image-rendering: pixelated;
+  text-shadow: 1px 1px 0 rgba(0, 0, 0, 0.7);
+  box-shadow: none;
   font: inherit;
   cursor: pointer;
-  transition:
-    transform 120ms ease,
-    filter 120ms ease,
-    opacity 120ms ease;
 }
 
 button:hover:not(:disabled) {
-  transform: translateY(-1px);
-  filter: brightness(1.08);
+  background-image: url("../src/data/images/gui/button/button_hover.png");
 }
 
 button:active:not(:disabled) {
-  transform: translateY(1px);
+  background-image: url("../src/data/images/gui/button/button_click.png");
 }
 
 button:disabled {
-  opacity: 0.55;
+  background-image: url("../src/data/images/gui/button/button_disable.png");
+  color: #bdbdcf;
   cursor: not-allowed;
-  background: linear-gradient(180deg, #4b4e63, var(--button-muted));
 }
 
 .canvas-frame {
@@ -278,30 +283,7 @@ button:disabled {
 }
 
 .overlay-card button {
-  background: url("../src/data/images/gui/button/button.png");
-  background-size: 100% 100%;
-  image-rendering: pixelated;
-  border-radius: 0;
-  box-shadow: none;
   padding: 14px 30px;
-  color: #ffffff;
-  text-shadow: 1px 1px 0 rgba(0, 0, 0, 0.7);
-}
-
-.overlay-card button:hover:not(:disabled) {
-  background-image: url("../src/data/images/gui/button/button_hover.png");
-  transform: none;
-  filter: none;
-}
-
-.overlay-card button:active:not(:disabled) {
-  background-image: url("../src/data/images/gui/button/button_click.png");
-  transform: none;
-}
-
-.overlay-card button:disabled {
-  background-image: url("../src/data/images/gui/button/button_disable.png");
-  opacity: 0.9;
 }
 
 .help-grid {
@@ -311,11 +293,7 @@ button:disabled {
 }
 
 .help-card {
-  padding: 16px;
-  border-radius: 16px;
-  background: var(--panel);
-  border: 1px solid var(--panel-border);
-  box-shadow: 0 12px 28px var(--shadow);
+  padding: 12px;
 }
 
 .help-card h2 {
@@ -351,10 +329,17 @@ code {
 }
 
 .touch-button {
-  border-radius: 14px;
   touch-action: none;
   user-select: none;
   -webkit-user-select: none;
+}
+
+.touch-button.action {
+  color: #ffcf6f;
+}
+
+.touch-button.pause {
+  color: #bfe3ef;
 }
 
 /* Slim always-available control bar for touch devices, so the game is
@@ -385,14 +370,6 @@ code {
   .touch-bar {
     display: flex;
   }
-}
-
-.touch-button.action {
-  background: linear-gradient(180deg, #ff8a6a, #d15b40);
-}
-
-.touch-button.pause {
-  background: linear-gradient(180deg, #57717d, #405059);
 }
 
 @media (max-width: 720px) {
