@@ -167,6 +167,7 @@ function buildImageManifest() {
   }
 
   manifest.menu_title = "src/data/images/gui/title.png";
+  manifest.menu_frame = "src/data/images/gui/frame.png";
   for (const gameNumber of [1, 2]) {
     for (const state of ["", "_hover", "_click"]) {
       manifest[`play_button_${gameNumber}${state}`] =
@@ -2397,6 +2398,7 @@ class PyoroWebGame {
     this.paused = false;
     this.gameOver = false;
     this.mainMenu = false;
+    this.menuScreen = "main";
     this.menuHoverId = null;
     this.menuPressedId = null;
     this.menuBotAbilityHeld = false;
@@ -2709,6 +2711,11 @@ class PyoroWebGame {
           bean_cut: SOUND_MANIFEST.bean_cut,
           pyoro_move: SOUND_MANIFEST.pyoro_move,
         }),
+        // Canvas text does not trigger @font-face loading on its own, so the
+        // game font must be ready before the menu first draws.
+        document.fonts?.load
+          ? document.fonts.load('26px "Pyoro UI"').catch(() => [])
+          : Promise.resolve(),
       ]);
     } catch (error) {
       this.showOverlay(
@@ -2767,23 +2774,11 @@ class PyoroWebGame {
     });
 
     this.muteButton.addEventListener("click", () => {
-      void this.primeAudio();
-      this.audio.toggle();
-      this.proceduralSfx.setEnabled(this.audio.enabled);
-      this.save.soundEnabled = this.audio.enabled;
-      writeSaveState(this.save);
-      this.syncSoundButton();
+      this.toggleSound();
     });
 
     this.musicButton.addEventListener("click", () => {
-      void this.primeAudio();
-      this.music.toggle();
-      this.save.musicEnabled = this.music.enabled;
-      writeSaveState(this.save);
-      this.syncMusicButton();
-      if (this.music.enabled && !this.paused) {
-        this.updateMusic(0);
-      }
+      this.toggleMusic();
     });
 
     this.fullscreenButton.addEventListener("click", () => {
@@ -2915,6 +2910,11 @@ class PyoroWebGame {
         return;
       }
 
+      if (event.code === "Escape" && this.mainMenu && this.menuScreen === "options") {
+        this.menuScreen = "main";
+        return;
+      }
+
       if (event.code === "KeyP" || event.code === "Escape") {
         this.togglePause();
         return;
@@ -3007,6 +3007,51 @@ class PyoroWebGame {
     document.addEventListener("webkitfullscreenchange", () => {
       this.syncFullscreenButton();
     });
+  }
+
+  toggleSound() {
+    void this.primeAudio();
+    this.audio.toggle();
+    this.proceduralSfx.setEnabled(this.audio.enabled);
+    this.save.soundEnabled = this.audio.enabled;
+    writeSaveState(this.save);
+    this.syncSoundButton();
+  }
+
+  toggleMusic() {
+    void this.primeAudio();
+    this.music.toggle();
+    this.save.musicEnabled = this.music.enabled;
+    writeSaveState(this.save);
+    this.syncMusicButton();
+    if (this.music.enabled && !this.paused) {
+      this.updateMusic(0);
+    }
+  }
+
+  resetSaveData() {
+    const storage = browserStorage();
+    try {
+      storage?.removeItem(STORAGE_KEY);
+      storage?.removeItem(LEGACY_HIGH_SCORE_KEY);
+    } catch (_error) {
+      // Storage may be unavailable; in-memory state still resets below.
+    }
+
+    this.save = defaultSaveState();
+    this.highScores = this.save.highScores;
+    this.selectedMode = this.save.selectedMode;
+    this.audio.setEnabled(this.save.soundEnabled);
+    this.proceduralSfx.setEnabled(this.save.soundEnabled);
+    this.music.setEnabled(this.save.musicEnabled);
+    this.aiEnabled = false;
+    this.applyStretchPreference();
+    this.syncSoundButton();
+    this.syncMusicButton();
+    this.syncStretchButton();
+    this.syncAiButton();
+    this.updateModeUi();
+    this.enterMainMenu();
   }
 
   syncSoundButton() {
@@ -3399,6 +3444,10 @@ class PyoroWebGame {
   }
 
   fullscreenElement() {
+    if (typeof document === "undefined") {
+      return null;
+    }
+
     return document.fullscreenElement || document.webkitFullscreenElement || null;
   }
 
@@ -3598,6 +3647,7 @@ class PyoroWebGame {
 
   enterMainMenu() {
     this.mainMenu = true;
+    this.menuScreen = "main";
     this.started = false;
     this.running = true;
     this.paused = false;
@@ -4362,13 +4412,73 @@ class PyoroWebGame {
     context.restore();
   }
 
-  // Main menu widget rects mirror the original's "Wide" layout template
-  // (src/data/layouts.json): play tiles on the right of center, option and
-  // quit buttons below them. The web swaps "Quitter" for a fullscreen toggle.
+  // The options screen mirrors the original OptionMenu dialog: a stretched
+  // frame background, left-aligned labels, and game-sprite buttons on the
+  // right, adapted to web-relevant settings.
+  optionsRows() {
+    const aiState = this.currentAiLoadState(this.selectedMode);
+    const rows = [
+      { id: "optMusic", label: "Music", value: this.music.enabled ? "On" : "Off" },
+      { id: "optSound", label: "Sound Effects", value: this.audio.enabled ? "On" : "Off" },
+    ];
+
+    if (aiState.status !== "unavailable") {
+      rows.push({
+        id: "optAi",
+        label: "AI Play",
+        value: aiState.status === "ready" ? (this.aiEnabled ? "On" : "Off") : "...",
+      });
+    }
+
+    if (this.supportsFullscreen()) {
+      rows.push(
+        { id: "optStretch", label: "Stretch In Fullscreen", value: this.save.stretchFullscreen ? "On" : "Off" },
+        { id: "optFullscreen", label: "Fullscreen", value: this.isFullscreenActive() ? "On" : "Off" },
+      );
+    }
+
+    return rows;
+  }
+
   menuWidgets() {
     const w = this.canvas.width;
     const h = this.canvas.height;
 
+    if (this.menuScreen === "options") {
+      const widgets = this.optionsRows().map((row, index) => ({
+        id: row.id,
+        image: "menu_button",
+        rect: [0.7 * w, (0.2 + index * 0.12 - 0.04) * h, 0.2 * w, 0.08 * h],
+        label: row.value,
+        fontScale: 0.03,
+        labelAnchorY: 0,
+      }));
+
+      widgets.push(
+        {
+          id: "optReset",
+          image: "menu_button",
+          rect: [0.05 * w, 0.88 * h, 0.4 * w, 0.07 * h],
+          label: "Reset Save Data",
+          fontScale: 0.03,
+          labelAnchorY: 0,
+        },
+        {
+          id: "optBack",
+          image: "menu_button",
+          rect: [0.55 * w, 0.88 * h, 0.4 * w, 0.07 * h],
+          label: "Back",
+          fontScale: 0.03,
+          labelAnchorY: 0,
+        },
+      );
+
+      return widgets;
+    }
+
+    // Main menu rects mirror the original's "Wide" layout template
+    // (src/data/layouts.json): play tiles right of center, option and quit
+    // buttons below them. The web swaps "Quitter" for a fullscreen toggle.
     return [
       {
         id: "play1",
@@ -4421,9 +4531,23 @@ class PyoroWebGame {
     } else if (widgetId === "play2") {
       this.startNewRun(1);
     } else if (widgetId === "options") {
-      this.setUiPanelOpen(true);
-    } else if (widgetId === "fullscreen") {
+      this.menuScreen = "options";
+    } else if (widgetId === "fullscreen" || widgetId === "optFullscreen") {
       void this.toggleFullscreen();
+    } else if (widgetId === "optMusic") {
+      this.toggleMusic();
+    } else if (widgetId === "optSound") {
+      this.toggleSound();
+    } else if (widgetId === "optAi") {
+      if (this.currentAiLoadState(this.selectedMode).status === "ready") {
+        void this.toggleAiControl();
+      }
+    } else if (widgetId === "optStretch") {
+      this.toggleStretchFullscreen();
+    } else if (widgetId === "optReset") {
+      this.resetSaveData();
+    } else if (widgetId === "optBack") {
+      this.menuScreen = "main";
     }
   }
 
@@ -4439,21 +4563,60 @@ class PyoroWebGame {
     };
   }
 
+  drawMenuText(context, text, x, y, fontSize, align = "center") {
+    context.save();
+    context.font = `${fontSize}px "Pyoro UI", monospace`;
+    context.textAlign = align;
+    context.textBaseline = "middle";
+    context.lineJoin = "round";
+    context.lineWidth = Math.max(3, Math.round(fontSize * 0.18));
+    context.strokeStyle = "rgba(0, 0, 0, 0.7)";
+    context.fillStyle = "#ffffff";
+    context.strokeText(text, x, y);
+    context.fillText(text, x, y);
+    context.restore();
+  }
+
   drawMenu(context) {
     const w = this.canvas.width;
     const h = this.canvas.height;
 
-    const title = this.assets.get("menu_title");
-    if (title) {
-      const titleWidth = 0.47 * w;
-      const titleHeight = 0.2 * h;
-      context.drawImage(
-        title,
-        0.25 * w - titleWidth / 2,
-        0.5 * h - titleHeight / 2,
-        titleWidth,
-        titleHeight,
-      );
+    if (this.menuScreen === "options") {
+      const frame = this.assets.get("menu_frame");
+      if (frame) {
+        context.drawImage(frame, 0, 0, w, h);
+      } else {
+        context.save();
+        context.fillStyle = "rgba(0, 0, 0, 0.55)";
+        context.fillRect(0, 0, w, h);
+        context.restore();
+      }
+
+      this.drawMenuText(context, "Options", 0.5 * w, 0.09 * h, Math.round(h * 0.05));
+      for (const [index, row] of this.optionsRows().entries()) {
+        this.drawMenuText(
+          context,
+          row.label,
+          0.08 * w,
+          (0.2 + index * 0.12) * h,
+          Math.round(h * 0.032),
+          "left",
+        );
+      }
+      this.drawMenuText(context, "Pyoro Web", 0.95 * w, 0.8 * h, Math.round(h * 0.022), "right");
+    } else {
+      const title = this.assets.get("menu_title");
+      if (title) {
+        const titleWidth = 0.47 * w;
+        const titleHeight = 0.2 * h;
+        context.drawImage(
+          title,
+          0.25 * w - titleWidth / 2,
+          0.5 * h - titleHeight / 2,
+          titleWidth,
+          titleHeight,
+        );
+      }
     }
 
     for (const widget of this.menuWidgets()) {
@@ -4468,21 +4631,13 @@ class PyoroWebGame {
         context.drawImage(image, left, top, width, height);
       }
 
-      const fontSize = Math.round(h * widget.fontScale);
-      const labelX = left + width / 2;
-      const labelY = top + height / 2 + widget.labelAnchorY * height;
-
-      context.save();
-      context.font = `${fontSize}px "Pyoro UI", monospace`;
-      context.textAlign = "center";
-      context.textBaseline = "middle";
-      context.lineJoin = "round";
-      context.lineWidth = Math.max(3, Math.round(fontSize * 0.18));
-      context.strokeStyle = "rgba(0, 0, 0, 0.7)";
-      context.fillStyle = "#ffffff";
-      context.strokeText(widget.label, labelX, labelY);
-      context.fillText(widget.label, labelX, labelY);
-      context.restore();
+      this.drawMenuText(
+        context,
+        widget.label,
+        left + width / 2,
+        top + height / 2 + widget.labelAnchorY * height,
+        Math.round(h * widget.fontScale),
+      );
     }
   }
 
