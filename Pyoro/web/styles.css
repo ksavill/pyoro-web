@@ -293,25 +293,6 @@ button:disabled {
   line-height: 1.45;
 }
 
-.diagnostics-grid {
-  display: grid;
-  gap: 10px;
-}
-
-.diagnostic-row {
-  display: grid;
-  gap: 4px;
-  padding: 10px 12px;
-  border-radius: 12px;
-  background: rgba(255, 255, 255, 0.05);
-}
-
-.diagnostic-row strong {
-  color: var(--text);
-  line-height: 1.4;
-  word-break: break-word;
-}
-
 kbd {
   padding: 0.15rem 0.4rem;
   border-radius: 6px;

@@ -1,9 +1,4 @@
-import {
-  ACTION_DEFINITIONS,
-  inferPolicyLogits,
-  loadPolicyModelFromUrl,
-  softmax,
-} from "./agent-policy.js";
+import { ACTION_DEFINITIONS } from "./agent-policy.js";
 import { heuristicDecisionForGame } from "./heuristic-policy.js";
 
 const CONFIG = Object.freeze({
@@ -62,11 +57,6 @@ const GAME_MODES = Object.freeze([
     risk: "Pink and super beans still keep their repair and chain-reaction effects, but dropped beans can still destroy the floor or hit Pyoro.",
   },
 ]);
-
-const AI_MODEL_PATHS = Object.freeze({
-  pyoro1: "web/models/pyoro1-agent.json",
-  pyoro2: "web/models/pyoro2-agent.json",
-});
 
 const POLICY_TOP_BEAN_COUNT = 8;
 const POLICY_SPECIAL_FEATURE_COUNT = 15;
@@ -176,6 +166,10 @@ function buildImageManifest() {
   }
   for (const state of ["", "_hover", "_click"]) {
     manifest[`menu_button${state}`] = `src/data/images/gui/button/button${state}.png`;
+    manifest[`switch_on${state}`] =
+      `src/data/images/gui/switch button/switch_activated${state}.png`;
+    manifest[`switch_off${state}`] =
+      `src/data/images/gui/switch button/switch_desactivated${state}.png`;
   }
 
   return manifest;
@@ -246,21 +240,6 @@ function createStubElement() {
       return null;
     },
   };
-}
-
-function actionLabelForIndex(actionIndex = 0) {
-  return (ACTION_DEFINITIONS[actionIndex] || ACTION_DEFINITIONS[0]).label;
-}
-
-function topProbabilityChoices(probabilities, limit = 3) {
-  return probabilities
-    .map((probability, index) => ({
-      probability,
-      index,
-      label: actionLabelForIndex(index),
-    }))
-    .sort((left, right) => right.probability - left.probability)
-    .slice(0, limit);
 }
 
 async function fetchAudioObjectUrl(source) {
@@ -2315,7 +2294,6 @@ class PyoroWebGame {
 
     this.startButton = this.headless ? createStubElement() : document.getElementById("startButton");
     this.pauseButton = this.headless ? createStubElement() : document.getElementById("pauseButton");
-    this.aiButton = this.headless ? createStubElement() : document.getElementById("aiButton");
     this.muteButton = this.headless ? createStubElement() : document.getElementById("muteButton");
     this.musicButton = this.headless ? createStubElement() : document.getElementById("musicButton");
     this.fullscreenButton = this.headless ? createStubElement() : document.getElementById("fullscreenButton");
@@ -2338,16 +2316,6 @@ class PyoroWebGame {
     this.abilityDescription = this.headless ? createStubElement() : document.getElementById("abilityDescription");
     this.abilityScoring = this.headless ? createStubElement() : document.getElementById("abilityScoring");
     this.abilityRisk = this.headless ? createStubElement() : document.getElementById("abilityRisk");
-    this.aiDiagnosticsCard = this.headless ? createStubElement() : document.getElementById("aiDiagnosticsCard");
-    this.aiDebugStatus = this.headless ? createStubElement() : document.getElementById("aiDebugStatus");
-    this.aiDebugModel = this.headless ? createStubElement() : document.getElementById("aiDebugModel");
-    this.aiDebugAction = this.headless ? createStubElement() : document.getElementById("aiDebugAction");
-    this.aiDebugTopChoices = this.headless ? createStubElement() : document.getElementById("aiDebugTopChoices");
-    this.aiDebugHeuristic = this.headless ? createStubElement() : document.getElementById("aiDebugHeuristic");
-    this.aiDebugAgreement = this.headless ? createStubElement() : document.getElementById("aiDebugAgreement");
-    this.aiDebugBehavior = this.headless ? createStubElement() : document.getElementById("aiDebugBehavior");
-    this.aiDebugTarget = this.headless ? createStubElement() : document.getElementById("aiDebugTarget");
-    this.aiDebugFloor = this.headless ? createStubElement() : document.getElementById("aiDebugFloor");
 
     this.assets = this.headless ? new SilentAssetStore() : new AssetStore(buildImageManifest());
     this.assetsReady = this.headless;
@@ -2412,33 +2380,7 @@ class PyoroWebGame {
     this.lastMusicScore = 0;
     this.lastAudioStyleType = 0;
     this.musicPlaybackRate = 1;
-    this.aiEnabled = false;
-    this.aiPolicies = new Map();
-    this.aiLoadStates = new Map();
-    this.aiDiagnostics = {
-      chosenActionIndex: 0,
-      heuristicActionIndex: 0,
-      confidence: 0,
-      topChoices: [],
-      reason: "inactive",
-      target: null,
-      totalDecisions: 0,
-      actionCounts: Array(ACTION_DEFINITIONS.length).fill(0),
-      sameActionStreak: 0,
-      longestSameActionStreak: 0,
-      lastActionIndex: null,
-      edgeSteps: 0,
-      heuristicAgreements: 0,
-      idleSteps: 0,
-      abilitySteps: 0,
-      horizontalSwitches: 0,
-      lastHorizontalDirection: 0,
-      stuckRisk: "low",
-      lastAvailableTileFraction: 1,
-      lastNoScoreSteps: 0,
-      modelSummary: "No model",
-    };
-
+    this.autoPlayer = false;
     this.loop = this.loop.bind(this);
   }
 
@@ -2695,7 +2637,6 @@ class PyoroWebGame {
     this.syncMusicButton();
     this.syncStretchButton();
     this.syncFullscreenButton();
-    this.syncAiButton();
     await this.loadCoreAssets();
   }
 
@@ -2729,7 +2670,6 @@ class PyoroWebGame {
     this.assetsReady = true;
     this.updateModeUi();
     this.enterMainMenu();
-    void this.loadAiPolicy(this.selectedMode);
     if (!this.loopStarted) {
       this.loopStarted = true;
       window.requestAnimationFrame(this.loop);
@@ -2767,10 +2707,6 @@ class PyoroWebGame {
 
     this.pauseButton.addEventListener("click", () => {
       this.togglePause();
-    });
-
-    this.aiButton.addEventListener("click", () => {
-      void this.toggleAiControl();
     });
 
     this.muteButton.addEventListener("click", () => {
@@ -3044,12 +2980,11 @@ class PyoroWebGame {
     this.audio.setEnabled(this.save.soundEnabled);
     this.proceduralSfx.setEnabled(this.save.soundEnabled);
     this.music.setEnabled(this.save.musicEnabled);
-    this.aiEnabled = false;
+    this.autoPlayer = false;
     this.applyStretchPreference();
     this.syncSoundButton();
     this.syncMusicButton();
     this.syncStretchButton();
-    this.syncAiButton();
     this.updateModeUi();
     this.enterMainMenu();
   }
@@ -3066,329 +3001,8 @@ class PyoroWebGame {
     this.musicButton.textContent = this.music.enabled ? "Music: On" : "Music: Off";
   }
 
-  aiModelPath(modeId = this.selectedMode) {
-    return AI_MODEL_PATHS[GAME_MODES[modeId]?.key] || null;
-  }
-
-  currentAiLoadState(modeId = this.selectedMode) {
-    return this.aiLoadStates.get(modeId) || {
-      status: "idle",
-      policy: null,
-      promise: null,
-    };
-  }
-
-  currentAiPolicy(modeId = this.selectedMode) {
-    return this.aiPolicies.get(modeId) || null;
-  }
-
-  resetAiDiagnostics() {
-    this.aiDiagnostics = {
-      chosenActionIndex: 0,
-      heuristicActionIndex: 0,
-      confidence: 0,
-      topChoices: [],
-      reason: this.aiEnabled ? "waiting" : "inactive",
-      target: null,
-      totalDecisions: 0,
-      actionCounts: Array(ACTION_DEFINITIONS.length).fill(0),
-      sameActionStreak: 0,
-      longestSameActionStreak: 0,
-      lastActionIndex: null,
-      edgeSteps: 0,
-      heuristicAgreements: 0,
-      idleSteps: 0,
-      abilitySteps: 0,
-      horizontalSwitches: 0,
-      lastHorizontalDirection: 0,
-      stuckRisk: "low",
-      lastAvailableTileFraction: 1,
-      lastNoScoreSteps: 0,
-      lastScore: this.score,
-      modelSummary: this.currentAiPolicy()
-        ? (
-          `${this.currentAiPolicy().metadata?.trainer ?? "policy"}`
-            + (this.currentAiPolicy().metadata?.iterationsCompleted !== undefined
-              ? ` @ ${this.currentAiPolicy().metadata.iterationsCompleted}`
-              : "")
-        )
-        : "No model",
-    };
-  }
-
-  recordAiDecision(actionIndex, probabilities, heuristicDecision) {
-    const action = ACTION_DEFINITIONS[actionIndex] || ACTION_DEFINITIONS[0];
-    const heuristicActionIndex = heuristicDecision?.actionIndex ?? 0;
-    const topChoices = topProbabilityChoices(probabilities, 3);
-    const currentEdge = Boolean(
-      this.pyoro
-      && (
-        this.pyoro.x <= this.pyoro.width / 2 + 0.75
-        || this.pyoro.x >= CONFIG.worldWidth - this.pyoro.width / 2 - 0.75
-      ),
-    );
-
-    this.aiDiagnostics.totalDecisions += 1;
-    this.aiDiagnostics.actionCounts[actionIndex] += 1;
-    this.aiDiagnostics.sameActionStreak = this.aiDiagnostics.lastActionIndex === actionIndex
-      ? this.aiDiagnostics.sameActionStreak + 1
-      : 1;
-    this.aiDiagnostics.longestSameActionStreak = Math.max(
-      this.aiDiagnostics.longestSameActionStreak,
-      this.aiDiagnostics.sameActionStreak,
-    );
-    this.aiDiagnostics.lastActionIndex = actionIndex;
-
-    if (action.horizontal !== 0) {
-      if (
-        this.aiDiagnostics.lastHorizontalDirection !== 0
-        && this.aiDiagnostics.lastHorizontalDirection !== action.horizontal
-      ) {
-        this.aiDiagnostics.horizontalSwitches += 1;
-      }
-      this.aiDiagnostics.lastHorizontalDirection = action.horizontal;
-    }
-
-    if (action.id === 0) {
-      this.aiDiagnostics.idleSteps += 1;
-    }
-    if (action.abilityHeld) {
-      this.aiDiagnostics.abilitySteps += 1;
-    }
-    if (currentEdge) {
-      this.aiDiagnostics.edgeSteps += 1;
-    }
-    if (heuristicActionIndex === actionIndex) {
-      this.aiDiagnostics.heuristicAgreements += 1;
-    }
-
-    this.aiDiagnostics.chosenActionIndex = actionIndex;
-    this.aiDiagnostics.heuristicActionIndex = heuristicActionIndex;
-    this.aiDiagnostics.confidence = topChoices[0]?.probability ?? 0;
-    this.aiDiagnostics.topChoices = topChoices;
-    this.aiDiagnostics.reason = heuristicDecision?.reason ?? "unknown";
-    this.aiDiagnostics.target = heuristicDecision?.target ?? null;
-    this.aiDiagnostics.modelSummary = this.currentAiPolicy()
-      ? (
-        `${this.currentAiPolicy().metadata?.trainer ?? "policy"}`
-          + (this.currentAiPolicy().metadata?.iterationsCompleted !== undefined
-            ? ` @ ${this.currentAiPolicy().metadata.iterationsCompleted}`
-            : "")
-      )
-      : "No model";
-
-    this.aiDiagnostics.lastNoScoreSteps = this.score > this.aiDiagnostics.lastScore
-      ? 0
-      : this.aiDiagnostics.lastNoScoreSteps + 1;
-    this.aiDiagnostics.lastScore = this.score;
-    this.aiDiagnostics.lastAvailableTileFraction = (
-      this.cases.length - this.holeCount()
-    ) / Math.max(this.cases.length, 1);
-
-    const dominantActionCount = Math.max(...this.aiDiagnostics.actionCounts);
-    const dominantActionFraction = dominantActionCount / Math.max(this.aiDiagnostics.totalDecisions, 1);
-    const edgeRate = this.aiDiagnostics.edgeSteps / Math.max(this.aiDiagnostics.totalDecisions, 1);
-
-    if (
-      this.aiDiagnostics.sameActionStreak >= 180
-      || dominantActionFraction >= 0.8
-      || edgeRate >= 0.7
-    ) {
-      this.aiDiagnostics.stuckRisk = "high";
-    } else if (
-      this.aiDiagnostics.sameActionStreak >= 90
-      || dominantActionFraction >= 0.65
-      || edgeRate >= 0.5
-    ) {
-      this.aiDiagnostics.stuckRisk = "medium";
-    } else {
-      this.aiDiagnostics.stuckRisk = "low";
-    }
-  }
-
-  aiTargetSummary() {
-    const target = this.aiDiagnostics.target;
-    if (!target) {
-      return "No active target";
-    }
-
-    const beanType = target.beanType || target.type || "normal";
-    const beanCoords = target.beanX !== undefined && target.beanY !== undefined
-      ? `${beanType} @ (${target.beanX.toFixed(1)}, ${target.beanY.toFixed(1)})`
-      : beanType;
-    if (target.targetX !== undefined) {
-      return `${beanCoords} -> intercept x=${target.targetX.toFixed(1)}`;
-    }
-    return beanCoords;
-  }
-
-  updateAiDiagnosticsUi() {
-    const state = this.currentAiLoadState(this.selectedMode);
-    const totalDecisions = Math.max(this.aiDiagnostics.totalDecisions, 1);
-    const dominantActionCount = Math.max(...this.aiDiagnostics.actionCounts);
-    const dominantActionIndex = this.aiDiagnostics.actionCounts.indexOf(dominantActionCount);
-    const dominantActionFraction = dominantActionCount / totalDecisions;
-    const edgeRate = this.aiDiagnostics.edgeSteps / totalDecisions;
-    const agreementRate = this.aiDiagnostics.heuristicAgreements / totalDecisions;
-    const modelLoaded = state.status === "ready";
-
-    this.aiDebugStatus.textContent = !modelLoaded
-      ? (state.status === "unavailable" ? "Unavailable" : "Loading")
-      : (this.aiEnabled ? `Running (${this.aiDiagnostics.stuckRisk})` : "Loaded, AI Off");
-    this.aiDebugModel.textContent = this.aiDiagnostics.modelSummary;
-    this.aiDebugAction.textContent = modelLoaded
-      ? `${actionLabelForIndex(this.aiDiagnostics.chosenActionIndex)} (${Math.round(this.aiDiagnostics.confidence * 100)}%)`
-      : "No action";
-    this.aiDebugTopChoices.textContent = modelLoaded
-      ? this.aiDiagnostics.topChoices
-        .map((choice) => `${choice.label} ${Math.round(choice.probability * 100)}%`)
-        .join(", ")
-      : "No probabilities";
-    this.aiDebugHeuristic.textContent = modelLoaded
-      ? `${actionLabelForIndex(this.aiDiagnostics.heuristicActionIndex)} (${this.aiDiagnostics.reason.replaceAll("_", " ")})`
-      : "No heuristic";
-    this.aiDebugAgreement.textContent = modelLoaded
-      ? `${Math.round(agreementRate * 100)}% agree`
-      : "N/A";
-    this.aiDebugBehavior.textContent = modelLoaded
-      ? [
-        `dominant ${actionLabelForIndex(dominantActionIndex)} ${Math.round(dominantActionFraction * 100)}%`,
-        `streak ${this.aiDiagnostics.sameActionStreak}`,
-        `edge ${Math.round(edgeRate * 100)}%`,
-      ].join(" | ")
-      : "No behavior data";
-    this.aiDebugTarget.textContent = this.aiTargetSummary();
-    this.aiDebugFloor.textContent = [
-      `${Math.round(this.aiDiagnostics.lastAvailableTileFraction * 100)}% floor`,
-      `no-score ${this.aiDiagnostics.lastNoScoreSteps}`,
-      `stuck ${this.aiDiagnostics.stuckRisk}`,
-    ].join(" | ");
-  }
-
-  syncAiButton() {
-    if (!this.aiButton) {
-      return;
-    }
-
-    const state = this.currentAiLoadState(this.selectedMode);
-    const unavailable = state.status === "unavailable";
-    this.aiButton.classList.toggle("hidden", unavailable);
-    this.aiDiagnosticsCard?.classList.toggle("hidden", unavailable);
-
-    if (state.status === "ready") {
-      this.aiButton.disabled = false;
-      this.aiButton.textContent = this.aiEnabled ? "AI: On" : "AI: Off";
-      this.aiButton.setAttribute("aria-pressed", this.aiEnabled ? "true" : "false");
-      return;
-    }
-
-    this.aiButton.disabled = true;
-    this.aiButton.setAttribute("aria-pressed", "false");
-    this.aiButton.textContent = "AI: Loading...";
-  }
-
-  async loadAiPolicy(modeId = this.selectedMode) {
-    if (this.headless) {
-      return null;
-    }
-
-    const existing = this.currentAiLoadState(modeId);
-    if (existing.status === "ready") {
-      return existing.policy;
-    }
-    if (existing.promise) {
-      return existing.promise;
-    }
-
-    const path = this.aiModelPath(modeId);
-    if (!path) {
-      console.warn(
-        `[Pyoro Web] AI unavailable for ${GAME_MODES[modeId]?.key ?? modeId}: no model path configured. AI controls stay hidden.`,
-      );
-      this.aiLoadStates.set(modeId, {
-        status: "unavailable",
-        policy: null,
-        promise: null,
-      });
-      this.syncAiButton();
-      return null;
-    }
-
-    const promise = loadPolicyModelFromUrl(path)
-      .then((model) => {
-        if (model.modeKey && model.modeKey !== GAME_MODES[modeId].key) {
-          throw new Error(`Model at ${path} is for ${model.modeKey}, not ${GAME_MODES[modeId].key}.`);
-        }
-        if (model.observationSize !== this.policyObservationSize()) {
-          throw new Error(
-            `Model at ${path} expects observation size ${model.observationSize}, not ${this.policyObservationSize()}.`,
-          );
-        }
-
-        this.aiPolicies.set(modeId, model);
-        this.aiLoadStates.set(modeId, {
-          status: "ready",
-          policy: model,
-          promise: null,
-        });
-        if (modeId === this.selectedMode) {
-          this.resetAiDiagnostics();
-        }
-        this.syncAiButton();
-        return model;
-      })
-      .catch((error) => {
-        console.warn(
-          `[Pyoro Web] AI unavailable for ${GAME_MODES[modeId].key}: could not load model from ${path}. AI controls stay hidden.`,
-          error,
-        );
-        this.aiPolicies.delete(modeId);
-        this.aiLoadStates.set(modeId, {
-          status: "unavailable",
-          policy: null,
-          promise: null,
-        });
-        if (modeId === this.selectedMode) {
-          this.aiEnabled = false;
-          this.clearAllInput();
-          this.resetAiDiagnostics();
-          this.syncAiButton();
-        }
-        return null;
-      });
-
-    this.aiLoadStates.set(modeId, {
-      status: "loading",
-      policy: null,
-      promise,
-    });
-    this.syncAiButton();
-    return promise;
-  }
-
-  clearAllInput() {
-    this.input.left = false;
-    this.input.right = false;
-    const shouldRecall = this.input.action;
-    this.input.action = false;
-    if (shouldRecall && this.pyoro) {
-      this.pyoro.recallAbility();
-    }
-    this.syncPlayerMovementFromInput();
-  }
-
-  async toggleAiControl() {
-    const policy = await this.loadAiPolicy(this.selectedMode);
-    if (!policy) {
-      this.aiEnabled = false;
-      this.syncAiButton();
-      return;
-    }
-
-    this.aiEnabled = !this.aiEnabled;
-    this.clearAllInput();
-    this.resetAiDiagnostics();
-    this.syncAiButton();
+  autoPlayerDriving() {
+    return this.autoPlayer && this.started && !this.gameOver && !this.mainMenu;
   }
 
   applyDiscreteAction(actionIndex = 0) {
@@ -3543,7 +3157,7 @@ class PyoroWebGame {
   }
 
   setDirectionInput(direction, pressed, source = "human") {
-    if (source === "human" && this.aiEnabled) {
+    if (source === "human" && this.autoPlayerDriving()) {
       return;
     }
 
@@ -3590,7 +3204,11 @@ class PyoroWebGame {
   }
 
   handleActionPress(source = "human") {
-    if (source === "human" && this.aiEnabled) {
+    if (source === "human" && this.autoPlayerDriving()) {
+      // The auto player owns gameplay input, but Space may still unpause.
+      if (this.paused) {
+        this.resume();
+      }
       return;
     }
 
@@ -3611,7 +3229,8 @@ class PyoroWebGame {
   }
 
   handleActionRelease(source = "human") {
-    if (source === "human" && this.aiEnabled) {
+    if (source === "human" && this.autoPlayerDriving()) {
+      this.input.action = false;
       return;
     }
 
@@ -3659,24 +3278,12 @@ class PyoroWebGame {
     this.updateMusic(0);
     this.hideOverlay();
     this.updateHud();
-    if (!this.headless) {
-      void this.loadAiPolicy(this.selectedMode);
-    }
-    this.syncAiButton();
   }
 
   handleModeSelection(modeId) {
     if (!this.applyModeSelection(modeId)) {
       return;
     }
-
-    if (!this.currentAiPolicy(modeId)) {
-      this.aiEnabled = false;
-    }
-    if (!this.headless) {
-      void this.loadAiPolicy(modeId);
-    }
-    this.syncAiButton();
 
     if (this.started && !this.gameOver) {
       this.startNewRun(modeId);
@@ -3740,7 +3347,6 @@ class PyoroWebGame {
     this.input.lastHorizontalDirection = 1;
     this.menuBotAbilityHeld = false;
     this.menuRestartPending = false;
-    this.resetAiDiagnostics();
     this.scheduleNextBean();
   }
 
@@ -3765,10 +3371,6 @@ class PyoroWebGame {
     this.updateMusic(0);
     this.hideOverlay();
     this.updateHud();
-    if (!this.headless) {
-      void this.loadAiPolicy(this.selectedMode);
-    }
-    this.syncAiButton();
   }
 
   pause(title = "Paused", message = "Take a breath and jump back in when you are ready.") {
@@ -3924,7 +3526,9 @@ class PyoroWebGame {
   }
 
   syncHighScore() {
-    if (this.mainMenu) {
+    // Bot-driven play (menu background or Auto Player) never records
+    // high scores.
+    if (this.mainMenu || this.autoPlayer) {
       return;
     }
 
@@ -4216,7 +3820,7 @@ class PyoroWebGame {
     this.leaves.push(new Leaf(this, leafX, leafY, speed, variant));
   }
 
-  driveMenuBot() {
+  driveHeuristicBot() {
     if (!this.pyoro || this.pyoro.dead) {
       return;
     }
@@ -4248,7 +3852,9 @@ class PyoroWebGame {
       if (this.menuRestartPending) {
         this.resetState();
       }
-      this.driveMenuBot();
+      this.driveHeuristicBot();
+    } else if (this.autoPlayerDriving()) {
+      this.driveHeuristicBot();
     }
 
     this.speed += deltaTime * CONFIG.speedAcceleration;
@@ -4301,6 +3907,33 @@ class PyoroWebGame {
     this.smokes = this.smokes.filter((smoke) => !smoke.removed);
 
     this.updateHud();
+  }
+
+  // Android-9-patch-style stretch like the original's stretch_image: corners
+  // stay crisp while edges and center stretch (frame.png is a 12x12 patch
+  // with a 5px border).
+  drawNinePatch(context, image, x, y, width, height, sourceBorder, destBorder) {
+    const sw = image.width;
+    const sh = image.height;
+    const sb = Math.min(sourceBorder, Math.floor(sw / 2), Math.floor(sh / 2));
+    const db = Math.min(destBorder, Math.floor(width / 2), Math.floor(height / 2));
+
+    // corners
+    context.drawImage(image, 0, 0, sb, sb, x, y, db, db);
+    context.drawImage(image, sw - sb, 0, sb, sb, x + width - db, y, db, db);
+    context.drawImage(image, 0, sh - sb, sb, sb, x, y + height - db, db, db);
+    context.drawImage(image, sw - sb, sh - sb, sb, sb, x + width - db, y + height - db, db, db);
+    // edges
+    context.drawImage(image, sb, 0, sw - sb * 2, sb, x + db, y, width - db * 2, db);
+    context.drawImage(image, sb, sh - sb, sw - sb * 2, sb, x + db, y + height - db, width - db * 2, db);
+    context.drawImage(image, 0, sb, sb, sh - sb * 2, x, y + db, db, height - db * 2);
+    context.drawImage(image, sw - sb, sb, sb, sh - sb * 2, x + width - db, y + db, db, height - db * 2);
+    // center
+    context.drawImage(
+      image,
+      sb, sb, sw - sb * 2, sh - sb * 2,
+      x + db, y + db, width - db * 2, height - db * 2,
+    );
   }
 
   drawCenteredImage(context, image, x, y, width, height) {
@@ -4416,19 +4049,10 @@ class PyoroWebGame {
   // frame background, left-aligned labels, and game-sprite buttons on the
   // right, adapted to web-relevant settings.
   optionsRows() {
-    const aiState = this.currentAiLoadState(this.selectedMode);
     const rows = [
       { id: "optMusic", label: "Music", value: this.music.enabled ? "On" : "Off" },
       { id: "optSound", label: "Sound Effects", value: this.audio.enabled ? "On" : "Off" },
     ];
-
-    if (aiState.status !== "unavailable") {
-      rows.push({
-        id: "optAi",
-        label: "AI Play",
-        value: aiState.status === "ready" ? (this.aiEnabled ? "On" : "Off") : "...",
-      });
-    }
 
     if (this.supportsFullscreen()) {
       rows.push(
@@ -4479,11 +4103,16 @@ class PyoroWebGame {
     // Main menu rects mirror the original's "Wide" layout template
     // (src/data/layouts.json): play tiles right of center, option and quit
     // buttons below them. The web swaps "Quitter" for a fullscreen toggle.
-    return [
+    // The play tiles stay square like their 95x95 source sprites.
+    const tileSide = 0.2 * w;
+    const switchHeight = 0.075 * h;
+    const switchWidth = switchHeight * (120 / 72);
+
+    const widgets = [
       {
         id: "play1",
         image: "play_button_1",
-        rect: [0.5 * w, 0.3 * h, 0.2 * w, 0.2 * h],
+        rect: [0.7 * w - tileSide, 0.5 * h - tileSide, tileSide, tileSide],
         label: `High Score: ${formatScore(this.highScores.pyoro1)}`,
         fontScale: 0.028,
         labelAnchorY: -0.1,
@@ -4491,7 +4120,7 @@ class PyoroWebGame {
       {
         id: "play2",
         image: "play_button_2",
-        rect: [0.75 * w, 0.3 * h, 0.2 * w, 0.2 * h],
+        rect: [0.75 * w, 0.5 * h - tileSide, tileSide, tileSide],
         label: `High Score: ${formatScore(this.highScores.pyoro2)}`,
         fontScale: 0.028,
         labelAnchorY: -0.1,
@@ -4512,7 +4141,17 @@ class PyoroWebGame {
         fontScale: 0.036,
         labelAnchorY: 0,
       },
+      {
+        id: "autoPlayer",
+        image: this.autoPlayer ? "switch_on" : "switch_off",
+        rect: [0.725 * w - switchWidth / 2, 0.78 * h - switchHeight / 2, switchWidth, switchHeight],
+        label: null,
+        fontScale: 0.03,
+        labelAnchorY: 0,
+      },
     ];
+
+    return widgets;
   }
 
   menuWidgetIdAt(x, y) {
@@ -4538,10 +4177,8 @@ class PyoroWebGame {
       this.toggleMusic();
     } else if (widgetId === "optSound") {
       this.toggleSound();
-    } else if (widgetId === "optAi") {
-      if (this.currentAiLoadState(this.selectedMode).status === "ready") {
-        void this.toggleAiControl();
-      }
+    } else if (widgetId === "autoPlayer") {
+      this.autoPlayer = !this.autoPlayer;
     } else if (widgetId === "optStretch") {
       this.toggleStretchFullscreen();
     } else if (widgetId === "optReset") {
@@ -4584,7 +4221,7 @@ class PyoroWebGame {
     if (this.menuScreen === "options") {
       const frame = this.assets.get("menu_frame");
       if (frame) {
-        context.drawImage(frame, 0, 0, w, h);
+        this.drawNinePatch(context, frame, 0, 0, w, h, 5, 10);
       } else {
         context.save();
         context.fillStyle = "rgba(0, 0, 0, 0.55)";
@@ -4617,6 +4254,15 @@ class PyoroWebGame {
           titleHeight,
         );
       }
+
+      this.drawMenuText(
+        context,
+        "Auto Player",
+        0.5 * w,
+        0.78 * h,
+        Math.round(h * 0.032),
+        "left",
+      );
     }
 
     for (const widget of this.menuWidgets()) {
@@ -4631,13 +4277,15 @@ class PyoroWebGame {
         context.drawImage(image, left, top, width, height);
       }
 
-      this.drawMenuText(
-        context,
-        widget.label,
-        left + width / 2,
-        top + height / 2 + widget.labelAnchorY * height,
-        Math.round(h * widget.fontScale),
-      );
+      if (widget.label) {
+        this.drawMenuText(
+          context,
+          widget.label,
+          left + width / 2,
+          top + height / 2 + widget.labelAnchorY * height,
+          Math.round(h * widget.fontScale),
+        );
+      }
     }
   }
 
@@ -4661,57 +4309,6 @@ class PyoroWebGame {
     context.fillText(scoreText, this.canvas.width * 0.25, y);
     context.strokeText(highScoreText, this.canvas.width * 0.75, y);
     context.fillText(highScoreText, this.canvas.width * 0.75, y);
-    context.restore();
-  }
-
-  drawAiDecisionOverlay(context) {
-    if (!this.aiEnabled || !this.currentAiPolicy()) {
-      return;
-    }
-
-    const target = this.aiDiagnostics.target;
-    if (!target) {
-      return;
-    }
-
-    const agree = this.aiDiagnostics.chosenActionIndex === this.aiDiagnostics.heuristicActionIndex;
-    const color = this.aiDiagnostics.stuckRisk === "high"
-      ? "#ff7a7a"
-      : agree
-        ? "#7dff9a"
-        : "#ffd85c";
-
-    context.save();
-    context.strokeStyle = color;
-    context.fillStyle = color;
-    context.lineWidth = 3;
-    context.setLineDash([10, 8]);
-
-    if (target.targetX !== undefined) {
-      const x = target.targetX * CONFIG.unit;
-      context.beginPath();
-      context.moveTo(x, 0);
-      context.lineTo(x, this.canvas.height);
-      context.stroke();
-    }
-
-    if (target.beanX !== undefined && target.beanY !== undefined) {
-      const x = target.beanX * CONFIG.unit;
-      const y = target.beanY * CONFIG.unit;
-      context.beginPath();
-      context.arc(x, y, Math.max(10, CONFIG.unit * 0.45), 0, Math.PI * 2);
-      context.stroke();
-    }
-
-    context.setLineDash([]);
-    context.font = '18px "Pyoro UI", monospace';
-    context.textAlign = "left";
-    context.textBaseline = "top";
-    context.fillText(
-      `${actionLabelForIndex(this.aiDiagnostics.chosenActionIndex)} ${Math.round(this.aiDiagnostics.confidence * 100)}%`,
-      24,
-      88,
-    );
     context.restore();
   }
 
@@ -4761,7 +4358,6 @@ class PyoroWebGame {
     }
 
     if (this.started) {
-      this.drawAiDecisionOverlay(this.context);
       this.drawCanvasHud(this.context);
     }
   }
@@ -4789,45 +4385,20 @@ class PyoroWebGame {
 
     this.pauseButton.disabled = !this.started || this.gameOver;
     this.pauseButton.textContent = this.paused ? "Resume" : "Pause";
-    this.updateAiDiagnosticsUi();
-  }
-
-  driveAiController() {
-    if (!this.aiEnabled || !this.canControlPlayer()) {
-      return;
-    }
-
-    const policy = this.currentAiPolicy();
-    if (!policy) {
-      return;
-    }
-
-    const observation = this.buildPolicyObservation();
-    const logits = inferPolicyLogits(policy, observation);
-    const probabilities = softmax(logits);
-    let actionIndex = 0;
-    for (let index = 1; index < logits.length; index += 1) {
-      if (logits[index] > logits[actionIndex]) {
-        actionIndex = index;
-      }
-    }
-
-    this.recordAiDecision(actionIndex, probabilities, heuristicDecisionForGame(this));
-    this.applyDiscreteAction(actionIndex);
   }
 
   runFixedStep(actionIndex = null, deltaTime = this.fixedStep) {
     if (actionIndex !== null) {
       this.applyDiscreteAction(actionIndex);
-    } else {
-      this.driveAiController();
     }
 
     if (this.running) {
       this.update(deltaTime);
     }
 
-    return this.buildPolicyObservation();
+    // Observations only matter to the headless training environment; the
+    // browser loop discards them, so skip that work in the browser.
+    return this.headless ? this.buildPolicyObservation() : null;
   }
 
   loop(timestamp) {

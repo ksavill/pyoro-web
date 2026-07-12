@@ -39,6 +39,7 @@ Pyoro/src/data/images/gui/*
 !Pyoro/src/data/images/gui/button/
 !Pyoro/src/data/images/gui/play button 1/
 !Pyoro/src/data/images/gui/play button 2/
+!Pyoro/src/data/images/gui/switch button/
 
 # Upstream sprite-naming notes, not needed by the web runtime
 name_format.txt

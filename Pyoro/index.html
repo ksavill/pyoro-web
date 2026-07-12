@@ -95,7 +95,6 @@
       <div class="actions">
         <button id="startButton" type="button">New Run</button>
         <button id="pauseButton" type="button" disabled>Pause</button>
-        <button id="aiButton" type="button" disabled>AI: Loading...</button>
         <button id="muteButton" type="button">Sound: Off</button>
         <button id="musicButton" type="button">Music: Off</button>
         <button id="fullscreenButton" type="button">Fullscreen</button>
@@ -137,49 +136,7 @@
           <p>This repo now treats the browser version as the main runtime.</p>
           <p>The original Python source under <code>src</code> stays as a legacy reference and shared asset source.</p>
           <p>The game can be hosted as static files with no Python runtime in production.</p>
-          <p>Optional AI play is enabled only when a trained model file is present for the selected mode.</p>
-        </div>
-
-        <div class="help-card" id="aiDiagnosticsCard">
-          <h2>AI Diagnostics</h2>
-          <div class="diagnostics-grid">
-            <div class="diagnostic-row">
-              <span class="label">Status</span>
-              <strong id="aiDebugStatus">Loading</strong>
-            </div>
-            <div class="diagnostic-row">
-              <span class="label">Model</span>
-              <strong id="aiDebugModel">No model</strong>
-            </div>
-            <div class="diagnostic-row">
-              <span class="label">Chosen</span>
-              <strong id="aiDebugAction">No action</strong>
-            </div>
-            <div class="diagnostic-row">
-              <span class="label">Top Choices</span>
-              <strong id="aiDebugTopChoices">No probabilities</strong>
-            </div>
-            <div class="diagnostic-row">
-              <span class="label">Heuristic</span>
-              <strong id="aiDebugHeuristic">No heuristic</strong>
-            </div>
-            <div class="diagnostic-row">
-              <span class="label">Agreement</span>
-              <strong id="aiDebugAgreement">N/A</strong>
-            </div>
-            <div class="diagnostic-row">
-              <span class="label">Behavior</span>
-              <strong id="aiDebugBehavior">No behavior data</strong>
-            </div>
-            <div class="diagnostic-row">
-              <span class="label">Target</span>
-              <strong id="aiDebugTarget">No target</strong>
-            </div>
-            <div class="diagnostic-row">
-              <span class="label">Floor</span>
-              <strong id="aiDebugFloor">No board data</strong>
-            </div>
-          </div>
+          <p>The Auto Player switch on the main menu lets the built-in heuristic play the game for you.</p>
         </div>
       </div>
     </section>

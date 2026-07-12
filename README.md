@@ -84,10 +84,11 @@ Evaluates a trained agent model against the same headless environment.
 ## Browser Game Features
 
 - Browser-native standalone implementation using `canvas`
+- Original-style main menu with play tiles for both modes, drawn with the original sprites and font over a live bot-played level
 - Original Pyoro mode with tongue catching, pink/super bean behavior, and floor repair flow
-- Pyoro 2 mode with browser-native shooting behavior available from the selector immediately
+- Pyoro 2 mode with browser-native shooting behavior available from the menu immediately
 - Keyboard and touch controls, original-inspired music playback, and browser fullscreen toggle support with optional stretch-to-fill
-- Optional browser AI play when a trained policy model is present for the selected mode
+- Auto Player switch on the main menu that lets the built-in heuristic bot play full runs (bot runs never record high scores)
 - Static hosting friendly: no Python runtime required in production
 - Reused original assets from `src/data/images` and `src/data/audio`
 
@@ -95,9 +96,9 @@ Evaluates a trained agent model against the same headless environment.
 
 - `index.html`: main browser entrypoint
 - `web/app.js`: browser game runtime
-- `web/agent-policy.js`: shared policy/action utilities used by browser inference and offline scripts
+- `web/agent-policy.js`: shared action definitions and policy utilities for the offline scripts
 - `web/headless-env.js`: headless environment wrapper for training and evaluation
-- `web/models`: generated browser-loadable AI policy files
+- `web/models`: generated AI policy files (offline training artifacts)
 - `web/styles.css`: browser UI styling
 - `scripts/dev-server.mjs`: zero-dependency local static server
 - `scripts/check.mjs`: syntax checks for the web-first project
@@ -107,7 +108,9 @@ Evaluates a trained agent model against the same headless environment.
 
 ## AI Agents
 
-The browser can optionally load trained AI models from:
+The browser game uses a built-in heuristic bot for the main menu's background level and for the Auto Player switch — no model download is needed to play or spectate.
+
+The offline training and evaluation scripts remain available and write trained policy models to:
 
 - `web/models/pyoro1-agent.json`
 - `web/models/pyoro2-agent.json`
@@ -117,9 +120,7 @@ There is support for both game variants:
 - `pyoro1` for regular Pyoro
 - `pyoro2` for Pyoro 2
 
-If a model file is missing or incompatible, the web UI keeps AI play unavailable for that mode and the game continues to work normally.
-
-The training and browser runtime both use the same JavaScript gameplay logic. Training runs headlessly in Node with a fixed simulation step, seeded RNG, and early no-score termination, while the browser only runs inference from the exported model file.
+The training scripts and the browser share the same JavaScript gameplay logic. Training runs headlessly in Node with a fixed simulation step, seeded RNG, and early no-score termination. The trained models are offline artifacts; the browser runtime no longer loads them.
 
 ## Deploy
 
