@@ -2,9 +2,9 @@
 
 ![Main menu](https://github.com/RedbeanGit/Pyoro/blob/main/Pyoro.png?raw=true)
 
-Pyoro Web is a browser-native port of the original Pyoro Python fan game. The main runtime is now plain `HTML`, `CSS`, and `JavaScript`, so the game can be hosted as static files and played directly in a browser.
+Pyoro Web is a browser-native port of [RedbeanGit/Pyoro](https://github.com/RedbeanGit/Pyoro), a Python/Pygame fan game recreation of Pyoro. The runtime is plain `HTML`, `CSS`, and `JavaScript`, so the game can be hosted as static files and played directly in a browser.
 
-The original Python/Pygame source is still kept in this repo under `src` as a legacy gameplay reference and shared asset source, but the browser version is the primary project.
+The original Python source is not included in this repo; the gameplay logic was ported to JavaScript using it as the reference. The sprites, audio, and font under `Pyoro/src/data` come from that original project.
 
 ## Quick Start
 
@@ -89,8 +89,8 @@ Evaluates a trained agent model against the same headless environment.
 - Pyoro 2 mode with browser-native shooting behavior available from the menu immediately
 - Keyboard and touch controls, original-inspired music playback, and browser fullscreen toggle support with optional stretch-to-fill
 - Auto Player switch on the main menu that lets the built-in heuristic bot play full runs (bot runs never record high scores)
-- Static hosting friendly: no Python runtime required in production
-- Reused original assets from `src/data/images` and `src/data/audio`
+- Static hosting friendly: no Python runtime required
+- Reuses the original project's assets from `src/data/images` and `src/data/audio`
 
 ## Project Structure
 
@@ -104,7 +104,7 @@ Evaluates a trained agent model against the same headless environment.
 - `scripts/check.mjs`: syntax checks for the web-first project
 - `scripts/train-agent.mjs`: offline policy-gradient training script
 - `scripts/evaluate-agent.mjs`: offline evaluation script
-- `src`: legacy Python reference code and original project assets
+- `src/data`: game assets (sprites, audio, font) from the original Pyoro project
 
 ## AI Agents
 
@@ -134,28 +134,6 @@ Because the web version is static HTML/CSS/JavaScript, you can deploy the `Pyoro
 
 No Python runtime is needed after deployment.
 
-## Legacy Python Reference
+## Credits
 
-The old Python/Pygame project is still included for reference.
-
-### Legacy Requirements
-
-The legacy version was originally built for GNU/Linux-based distributions and requires at least [Python 3.8](https://www.python.org/downloads/), [Pipenv](https://pypi.org/project/pipenv/), and [Portaudio 19](http://www.portaudio.com/).
-
-For Debian users:
-
-```bash
-apt install python3.8 pipenv portaudio19-dev
-```
-
-### Run The Legacy Python Version
-
-```bash
-pipenv install
-pipenv shell
-./src/main.py
-```
-
-### Legacy Modding
-
-At each start, the legacy Python game tries to load mods stored in the game save folder. To modify that version without changing the source code, place your mod (`.py`) in `/home/<user>/share/Pyoro`.
+This project is a port of [Pyoro by RedbeanGit](https://github.com/RedbeanGit/Pyoro) (GPL-3.0), a Python/Pygame fan game recreation of Nintendo's Pyoro. The sprites, sounds, music, and font in `Pyoro/src/data` originate from that project, and its gameplay code served as the reference for this port. Pyoro itself is a Nintendo game; this is an unofficial fan project.
