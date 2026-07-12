@@ -1,5 +1,5 @@
 import { ACTION_DEFINITIONS } from "./agent-policy.js";
-import { heuristicDecisionForGame, reachableRange } from "./heuristic-policy.js";
+import { heuristicDecisionForGame } from "./heuristic-policy.js";
 
 const CONFIG = Object.freeze({
   worldWidth: 32,
@@ -2510,7 +2510,6 @@ class PyoroWebGame {
     }
 
     const floorDamage = this.holeCount() / CONFIG.worldWidth;
-    const range = reachableRange(this);
     let bestTarget = null;
 
     for (const bean of this.activeBeans()) {
@@ -2521,13 +2520,6 @@ class PyoroWebGame {
       }
 
       const direction = bean.x >= player.x ? 1 : -1;
-
-      // Skip beans whose firing position cannot be reached because a floor
-      // hole (or the wall) blocks the path.
-      const interceptX = bean.x - direction * (player.y - bean.y);
-      if (interceptX < range.minX - 0.5 || interceptX > range.maxX + 0.5) {
-        continue;
-      }
       const aligned = player.direction === direction && player.isShootingEntity(bean);
       const urgency = bean.y / CONFIG.worldHeight;
       const lateralDistance = Math.abs(bean.x - player.x) / CONFIG.worldWidth;
