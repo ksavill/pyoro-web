@@ -35,29 +35,12 @@ body {
 
 body {
   min-height: 100vh;
+  overflow: hidden;
 }
 
 .app-shell {
-  width: min(96vw, 1440px);
-  margin: 0 auto;
-  padding: 24px 18px 32px;
-}
-
-.topbar {
-  display: grid;
-  gap: 16px;
-  justify-items: center;
-  margin-bottom: 14px;
-}
-
-.branding {
-  display: grid;
-  gap: 10px;
-}
-
-.title-image {
-  width: min(100%, 380px);
-  image-rendering: pixelated;
+  width: 100%;
+  height: 100dvh;
 }
 
 .status-panel {
@@ -94,16 +77,28 @@ body {
 }
 
 .ui-panel {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
   display: grid;
   gap: 16px;
-  margin-top: 16px;
+  align-content: start;
+  padding: 72px 18px 32px;
+  overflow-y: auto;
+  background: rgba(8, 8, 18, 0.86);
+  backdrop-filter: blur(8px);
+}
+
+.ui-panel > * {
+  width: min(96vw, 1100px);
+  margin-inline: auto;
 }
 
 .ui-toggle {
-  position: absolute;
+  position: fixed;
   top: 12px;
   right: 12px;
-  z-index: 6;
+  z-index: 30;
   width: 44px;
   height: 44px;
   padding: 0;
@@ -185,20 +180,12 @@ button:disabled {
   background: linear-gradient(180deg, #4b4e63, var(--button-muted));
 }
 
-.game-card {
-  background: var(--panel);
-  border: 1px solid var(--panel-border);
-  border-radius: 20px;
-  padding: 16px;
-  box-shadow: 0 18px 36px var(--shadow);
-}
-
 .canvas-frame {
-  position: relative;
-  border-radius: 16px;
-  overflow: hidden;
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
   background: #000;
-  aspect-ratio: 16 / 9;
 }
 
 .canvas-frame:fullscreen,
@@ -214,8 +201,8 @@ button:disabled {
 
 #gameCanvas {
   display: block;
-  width: 100%;
-  height: 100%;
+  width: min(100vw, calc(100dvh * 16 / 9));
+  height: min(100dvh, calc(100vw * 9 / 16));
   image-rendering: pixelated;
   background: #000;
 }
@@ -347,15 +334,20 @@ code {
    playable without opening the menu panel. Hidden on hover-capable
    (mouse/trackpad) devices. */
 .touch-bar {
+  position: fixed;
+  bottom: 12px;
+  left: 12px;
+  right: 12px;
+  z-index: 10;
   display: none;
   gap: 10px;
-  margin-top: 12px;
 }
 
 .touch-bar .touch-button {
   flex: 1;
   padding: 16px 0;
   font-size: 1.05rem;
+  opacity: 0.82;
 }
 
 .touch-bar .touch-button.pause {
@@ -377,15 +369,6 @@ code {
 }
 
 @media (max-width: 720px) {
-  .app-shell {
-    width: 100%;
-    padding-inline: 12px;
-  }
-
-  .game-card {
-    padding: 10px;
-  }
-
   .overlay-card {
     width: 100%;
   }

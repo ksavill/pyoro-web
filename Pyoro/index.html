@@ -13,42 +13,30 @@
 </head>
 <body>
   <main class="app-shell">
-    <header class="topbar">
-      <div class="branding">
-        <img
-          class="title-image"
-          src="src/data/images/gui/title.png"
-          alt="Pyoro"
-        >
-      </div>
-    </header>
-
-    <section class="game-card">
-      <div class="canvas-frame">
-        <canvas
-          id="gameCanvas"
-          width="1280"
-          height="720"
-          aria-label="Pyoro web game"
-        ></canvas>
-        <div class="overlay" id="overlay">
-          <div class="overlay-card">
-            <h1 id="overlayTitle">Loading Pyoro Web...</h1>
-            <p id="overlayMessage">Preparing sprites and sounds.</p>
-            <button id="overlayButton" type="button" disabled>Loading...</button>
-          </div>
+    <div class="canvas-frame">
+      <canvas
+        id="gameCanvas"
+        width="1280"
+        height="720"
+        aria-label="Pyoro web game"
+      ></canvas>
+      <div class="overlay" id="overlay">
+        <div class="overlay-card">
+          <h1 id="overlayTitle">Loading Pyoro Web...</h1>
+          <p id="overlayMessage">Preparing sprites and sounds.</p>
+          <button id="overlayButton" type="button" disabled>Loading...</button>
         </div>
-        <button
-          id="uiToggleButton"
-          class="ui-toggle"
-          type="button"
-          aria-expanded="false"
-          aria-controls="uiPanel"
-          aria-label="Toggle menu"
-          title="Menu (M)"
-        >&#9776;</button>
       </div>
-    </section>
+      <button
+        id="uiToggleButton"
+        class="ui-toggle"
+        type="button"
+        aria-expanded="false"
+        aria-controls="uiPanel"
+        aria-label="Toggle menu"
+        title="Menu (M)"
+      >&#9776;</button>
+    </div>
 
     <section class="touch-bar" aria-label="Touch controls">
       <button class="touch-button" data-control="left" type="button">Left</button>

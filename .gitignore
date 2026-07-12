@@ -2,6 +2,9 @@
 node_modules/
 npm-debug.log*
 
+# Runtime logs
+*.log
+
 # Python bytecode (defensive; the Python sources themselves are ignored below)
 *.pyc
 __pycache__/
@@ -32,6 +35,9 @@ Pyoro/src/data/images/gui/*
 !Pyoro/src/data/images/gui/font.ttf
 !Pyoro/src/data/images/gui/title.png
 !Pyoro/src/data/images/gui/pyoro_icon.png
+!Pyoro/src/data/images/gui/button/
+!Pyoro/src/data/images/gui/play button 1/
+!Pyoro/src/data/images/gui/play button 2/
 
 # Upstream sprite-naming notes, not needed by the web runtime
 name_format.txt
