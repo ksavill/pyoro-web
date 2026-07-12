@@ -164,11 +164,6 @@ function buildImageManifest() {
   }
   for (const state of ["", "_hover", "_click"]) {
     manifest[`menu_button${state}`] = `src/data/images/gui/button/button${state}.png`;
-    // "activated" is the bright/white sprite and reads as ON.
-    manifest[`switch_on${state}`] =
-      `src/data/images/gui/switch button/switch_activated${state}.png`;
-    manifest[`switch_off${state}`] =
-      `src/data/images/gui/switch button/switch_desactivated${state}.png`;
   }
 
   return manifest;
@@ -4225,7 +4220,7 @@ class PyoroWebGame {
       },
       {
         id: "autoPlayer",
-        image: this.autoPlayer ? "switch_on" : "switch_off",
+        type: "switch",
         rect: [0.725 * w - switchWidth / 2, 0.78 * h - switchHeight / 2, switchWidth, switchHeight],
         label: null,
         fontScale: 0.03,
@@ -4297,6 +4292,31 @@ class PyoroWebGame {
     context.fillStyle = fillStyle;
     context.strokeText(text, x, y);
     context.fillText(text, x, y);
+    context.restore();
+  }
+
+  // Drawn directly (instead of using the ambiguous upstream sprites) so the
+  // toggle reads unambiguously: white handle on the right = on, dark handle
+  // on the left = off.
+  drawSwitch(context, rect, on, hovered, pressed) {
+    const [x, y, width, height] = rect;
+    const border = Math.max(2, Math.round(height * 0.09));
+    const pad = border * 2;
+    const cell = height - pad * 2;
+    const handleX = on ? x + width - pad - cell : x + pad;
+
+    context.save();
+    context.fillStyle = pressed ? "#0a0a0a" : "#161616";
+    context.fillRect(x, y, width, height);
+    context.strokeStyle = hovered ? "#ffd54a" : "#ffffff";
+    context.lineWidth = border;
+    context.strokeRect(x + border / 2, y + border / 2, width - border, height - border);
+
+    context.fillStyle = on ? "#f7f7f7" : "#333333";
+    context.fillRect(handleX, y + pad, cell, cell);
+    context.strokeStyle = on ? "#ffffff" : "#000000";
+    context.lineWidth = Math.max(1, border - 1);
+    context.strokeRect(handleX, y + pad, cell, cell);
     context.restore();
   }
 
@@ -4382,6 +4402,11 @@ class PyoroWebGame {
       const [left, top, width, height] = widget.rect;
       const hovered = this.menuHoverId === widget.id;
       const pressed = hovered && this.menuPressedId === widget.id;
+
+      if (widget.type === "switch") {
+        this.drawSwitch(context, widget.rect, this.autoPlayer, hovered, pressed);
+        continue;
+      }
 
       if (widget.type === "text") {
         // Clickable text like the original's ClickableText widgets:
