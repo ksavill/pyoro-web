@@ -164,12 +164,11 @@ function buildImageManifest() {
   }
   for (const state of ["", "_hover", "_click"]) {
     manifest[`menu_button${state}`] = `src/data/images/gui/button/button${state}.png`;
-    // The upstream art is named the opposite of how it reads: the
-    // "desactivated" sprite visually shows the switch in the ON position.
+    // "activated" is the bright/white sprite and reads as ON.
     manifest[`switch_on${state}`] =
-      `src/data/images/gui/switch button/switch_desactivated${state}.png`;
-    manifest[`switch_off${state}`] =
       `src/data/images/gui/switch button/switch_activated${state}.png`;
+    manifest[`switch_off${state}`] =
+      `src/data/images/gui/switch button/switch_desactivated${state}.png`;
   }
 
   return manifest;
@@ -2329,6 +2328,7 @@ class PyoroWebGame {
     this.canvasFrame = this.headless ? createStubElement() : document.querySelector(".canvas-frame");
 
     this.startButton = this.headless ? createStubElement() : document.getElementById("startButton");
+    this.mainMenuButton = this.headless ? createStubElement() : document.getElementById("mainMenuButton");
     this.pauseButton = this.headless ? createStubElement() : document.getElementById("pauseButton");
     this.muteButton = this.headless ? createStubElement() : document.getElementById("muteButton");
     this.musicButton = this.headless ? createStubElement() : document.getElementById("musicButton");
@@ -2752,6 +2752,15 @@ class PyoroWebGame {
     this.startButton.addEventListener("click", () => {
       void this.primeAudio();
       this.startNewRun();
+    });
+
+    this.mainMenuButton.addEventListener("click", () => {
+      if (!this.assetsReady) {
+        return;
+      }
+
+      this.setUiPanelOpen(false);
+      this.enterMainMenu();
     });
 
     this.pauseButton.addEventListener("click", () => {
