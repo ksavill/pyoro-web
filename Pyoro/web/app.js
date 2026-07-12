@@ -324,7 +324,6 @@ function defaultSaveState() {
     soundEnabled: false,
     musicEnabled: false,
     stretchFullscreen: false,
-    uiPanelOpen: false,
     highScores: {
       pyoro1: 0,
       pyoro2: 0,
@@ -356,7 +355,6 @@ function sanitizeSaveState(raw) {
     soundEnabled: Boolean(raw?.soundEnabled),
     musicEnabled: Boolean(raw?.musicEnabled),
     stretchFullscreen: Boolean(raw?.stretchFullscreen ?? raw?.stretchToFill),
-    uiPanelOpen: Boolean(raw?.uiPanelOpen),
     highScores: {
       pyoro1: pyoro1HighScore,
       pyoro2: pyoro2HighScore,
@@ -2325,6 +2323,8 @@ class PyoroWebGame {
     this.modeAdvancedButton = this.headless ? createStubElement() : document.getElementById("modeAdvancedButton");
     this.uiPanel = this.headless ? createStubElement() : document.getElementById("uiPanel");
     this.uiToggleButton = this.headless ? createStubElement() : document.getElementById("uiToggleButton");
+    this.uiCloseButton = this.headless ? createStubElement() : document.getElementById("uiCloseButton");
+    this.uiPanelOpen = false;
 
     this.scoreValue = this.headless ? createStubElement() : document.getElementById("scoreValue");
     this.highScoreValue = this.headless ? createStubElement() : document.getElementById("highScoreValue");
@@ -2688,7 +2688,7 @@ class PyoroWebGame {
 
     this.bindUi();
     this.applyStretchPreference();
-    this.applyUiPanelPreference();
+    this.setUiPanelOpen(false);
     this.syncSoundButton();
     this.syncMusicButton();
     this.syncStretchButton();
@@ -2798,6 +2798,10 @@ class PyoroWebGame {
       this.toggleUiPanel();
     });
 
+    this.uiCloseButton.addEventListener("click", () => {
+      this.setUiPanelOpen(false);
+    });
+
     this.canvas.addEventListener("pointermove", (event) => {
       if (!this.mainMenu) {
         return;
@@ -2903,6 +2907,11 @@ class PyoroWebGame {
         }
 
         this.handleActionPress();
+        return;
+      }
+
+      if (event.code === "Escape" && this.uiPanelOpen) {
+        this.setUiPanelOpen(false);
         return;
       }
 
@@ -3357,20 +3366,16 @@ class PyoroWebGame {
     this.canvasFrame.classList.toggle("stretch-fullscreen", Boolean(this.save.stretchFullscreen));
   }
 
-  applyUiPanelPreference() {
-    const open = Boolean(this.save.uiPanelOpen);
-    this.uiPanel.classList.toggle("hidden", !open);
-    this.uiToggleButton.setAttribute("aria-expanded", open ? "true" : "false");
-  }
-
   setUiPanelOpen(open) {
-    this.save.uiPanelOpen = Boolean(open);
-    writeSaveState(this.save);
-    this.applyUiPanelPreference();
+    // The panel is transient overlay UI: it always starts closed and is
+    // never persisted, so the game can never boot covered by it.
+    this.uiPanelOpen = Boolean(open);
+    this.uiPanel.classList.toggle("hidden", !this.uiPanelOpen);
+    this.uiToggleButton.setAttribute("aria-expanded", this.uiPanelOpen ? "true" : "false");
   }
 
   toggleUiPanel() {
-    this.setUiPanelOpen(!this.save.uiPanelOpen);
+    this.setUiPanelOpen(!this.uiPanelOpen);
   }
 
   syncStretchButton() {
