@@ -164,10 +164,12 @@ function buildImageManifest() {
   }
   for (const state of ["", "_hover", "_click"]) {
     manifest[`menu_button${state}`] = `src/data/images/gui/button/button${state}.png`;
+    // The upstream art is named the opposite of how it reads: the
+    // "desactivated" sprite visually shows the switch in the ON position.
     manifest[`switch_on${state}`] =
-      `src/data/images/gui/switch button/switch_activated${state}.png`;
-    manifest[`switch_off${state}`] =
       `src/data/images/gui/switch button/switch_desactivated${state}.png`;
+    manifest[`switch_off${state}`] =
+      `src/data/images/gui/switch button/switch_activated${state}.png`;
   }
 
   return manifest;
