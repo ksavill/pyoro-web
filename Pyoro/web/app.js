@@ -27,7 +27,6 @@ const CONFIG = Object.freeze({
   leafSpriteDuration: 0.2,
   leafWindSpeed: 15,
   smokeSpriteDuration: 0.2,
-  audioSpeedAcceleration: 0.002,
   scorePopupBlinkDuration: 0.05,
   scorePopupLife: 0.3,
 });
@@ -2366,7 +2365,7 @@ class PyoroWebGame {
     this.paused = false;
     this.gameOver = false;
     this.mainMenu = false;
-    this.menuScreen = "main";
+    this.optionsOpen = false;
     this.menuHoverId = null;
     this.menuPressedId = null;
     this.menuBotAbilityHeld = false;
@@ -2378,7 +2377,6 @@ class PyoroWebGame {
     this.animatedAccumulator = 0;
     this.lastMusicStyleType = 0;
     this.lastMusicScore = 0;
-    this.lastAudioStyleType = 0;
     this.musicPlaybackRate = 1;
     this.autoPlayer = false;
     this.loop = this.loop.bind(this);
@@ -2734,7 +2732,7 @@ class PyoroWebGame {
     });
 
     this.canvas.addEventListener("pointermove", (event) => {
-      if (!this.mainMenu) {
+      if (!this.canvasUiScreen()) {
         return;
       }
 
@@ -2744,7 +2742,7 @@ class PyoroWebGame {
     });
 
     this.canvas.addEventListener("pointerdown", (event) => {
-      if (!this.mainMenu) {
+      if (!this.canvasUiScreen()) {
         return;
       }
 
@@ -2755,7 +2753,7 @@ class PyoroWebGame {
     });
 
     this.canvas.addEventListener("pointerup", (event) => {
-      if (!this.mainMenu) {
+      if (!this.canvasUiScreen()) {
         return;
       }
 
@@ -2785,17 +2783,10 @@ class PyoroWebGame {
     });
 
     this.overlayButton.addEventListener("click", () => {
+      // The DOM overlay only exists for the loading/asset-failure states;
+      // every in-game menu is drawn on the canvas.
       if (!this.assetsReady) {
         void this.loadCoreAssets();
-        return;
-      }
-
-      if (this.gameOver) {
-        this.enterMainMenu();
-      } else if (this.paused) {
-        this.resume();
-      } else if (!this.started) {
-        this.startNewRun();
       }
     });
 
@@ -2846,8 +2837,8 @@ class PyoroWebGame {
         return;
       }
 
-      if (event.code === "Escape" && this.mainMenu && this.menuScreen === "options") {
-        this.menuScreen = "main";
+      if (event.code === "Escape" && this.optionsOpen) {
+        this.optionsOpen = false;
         return;
       }
 
@@ -2928,11 +2919,17 @@ class PyoroWebGame {
     }
 
     window.addEventListener("blur", () => {
+      // The auto player keeps playing unattended; only human runs pause
+      // when the browser loses focus.
+      if (this.autoPlayerDriving()) {
+        return;
+      }
+
       this.input.left = false;
       this.input.right = false;
       this.input.action = false;
       if (this.started && this.running && !this.gameOver) {
-        this.pause("Paused", "The game paused when the browser lost focus.");
+        this.pause();
       }
     });
 
@@ -3266,7 +3263,7 @@ class PyoroWebGame {
 
   enterMainMenu() {
     this.mainMenu = true;
-    this.menuScreen = "main";
+    this.optionsOpen = false;
     this.started = false;
     this.running = true;
     this.paused = false;
@@ -3337,7 +3334,6 @@ class PyoroWebGame {
     this.animatedAccumulator = 0;
     this.lastMusicStyleType = 0;
     this.lastMusicScore = 0;
-    this.lastAudioStyleType = 0;
     this.musicPlaybackRate = 1;
     this.lastTimestamp = null;
     this.frameAccumulator = 0;
@@ -3356,6 +3352,7 @@ class PyoroWebGame {
     }
 
     this.mainMenu = false;
+    this.optionsOpen = false;
     this.menuHoverId = null;
     this.menuPressedId = null;
     if (this.canvas.style) {
@@ -3373,18 +3370,18 @@ class PyoroWebGame {
     this.updateHud();
   }
 
-  pause(title = "Paused", message = "Take a breath and jump back in when you are ready.") {
+  pause() {
     if (!this.started || this.gameOver) {
       return;
     }
 
     this.running = false;
     this.paused = true;
+    this.optionsOpen = false;
     this.lastTimestamp = null;
     this.frameAccumulator = 0;
     this.pyoro?.stopMovementAudio();
     this.music.pauseAll();
-    this.showOverlay(title, message, "Resume");
     this.updateHud();
   }
 
@@ -3395,11 +3392,11 @@ class PyoroWebGame {
 
     this.running = true;
     this.paused = false;
+    this.optionsOpen = false;
     this.lastTimestamp = null;
     this.frameAccumulator = 0;
     this.music.resumeAll();
     this.updateMusic(0);
-    this.hideOverlay();
     this.updateHud();
   }
 
@@ -3442,11 +3439,6 @@ class PyoroWebGame {
       this.music.playOneShot("game_over", { volume: 0.45 });
     }
 
-    this.showOverlay(
-      "Game Over",
-      `Final score: ${formatScore(this.score)}. Press R or Space for a rematch.`,
-      "Back to Menu",
-    );
     this.updateHud();
   }
 
@@ -3565,18 +3557,15 @@ class PyoroWebGame {
     return `background_${this.currentMode().backgroundSet}_${backgroundId}`;
   }
 
-  updateAudioPlaybackRate(deltaTime) {
-    // Like the original, all audio slowly speeds up while Pyoro is alive.
-    // The rate resets on death, game over, and the 20000/30000 style changes.
-    const styleType = this.styleType();
-    if (styleType !== this.lastAudioStyleType) {
-      this.lastAudioStyleType = styleType;
+  updateAudioPlaybackRate(_deltaTime) {
+    // The original fan game gradually resampled all audio faster during a
+    // run, which makes the music drift audibly off pitch. The web version
+    // keeps playback locked at normal speed.
+    if (this.musicPlaybackRate !== 1) {
       this.musicPlaybackRate = 1;
-    } else if (this.started && this.pyoro && !this.pyoro.dead) {
-      this.musicPlaybackRate += CONFIG.audioSpeedAcceleration * deltaTime;
+      this.audio.setPlaybackRate(1);
+      this.music.setPlaybackRate(1);
     }
-
-    this.audio.setPlaybackRate(this.musicPlaybackRate);
   }
 
   updateMusic(deltaTime) {
@@ -4048,6 +4037,19 @@ class PyoroWebGame {
   // The options screen mirrors the original OptionMenu dialog: a stretched
   // frame background, left-aligned labels, and game-sprite buttons on the
   // right, adapted to web-relevant settings.
+  canvasUiScreen() {
+    if (this.mainMenu) {
+      return this.optionsOpen ? "options" : "main";
+    }
+    if (this.paused) {
+      return this.optionsOpen ? "options" : "pause";
+    }
+    if (this.gameOver) {
+      return "gameover";
+    }
+    return null;
+  }
+
   optionsRows() {
     const rows = [
       { id: "optMusic", label: "Music", value: this.music.enabled ? "On" : "Off" },
@@ -4067,8 +4069,25 @@ class PyoroWebGame {
   menuWidgets() {
     const w = this.canvas.width;
     const h = this.canvas.height;
+    const screen = this.canvasUiScreen();
 
-    if (this.menuScreen === "options") {
+    if (screen === "pause") {
+      // Mirrors the original PauseMenu: title plus three clickable texts.
+      return [
+        { id: "pauseResume", type: "text", label: "Continue", rect: [0.38 * w, 0.42 * h, 0.24 * w, 0.07 * h], fontScale: 0.034 },
+        { id: "pauseOptions", type: "text", label: "Options", rect: [0.38 * w, 0.53 * h, 0.24 * w, 0.07 * h], fontScale: 0.034 },
+        { id: "pauseQuit", type: "text", label: "Quit", rect: [0.38 * w, 0.64 * h, 0.24 * w, 0.07 * h], fontScale: 0.034 },
+      ];
+    }
+
+    if (screen === "gameover") {
+      // Mirrors the original GameOverMenu: title, score, one clickable text.
+      return [
+        { id: "gameOverMenu", type: "text", label: "Menu", rect: [0.38 * w, 0.60 * h, 0.24 * w, 0.07 * h], fontScale: 0.034 },
+      ];
+    }
+
+    if (screen === "options") {
       const widgets = this.optionsRows().map((row, index) => ({
         id: row.id,
         image: "menu_button",
@@ -4169,8 +4188,8 @@ class PyoroWebGame {
       this.startNewRun(0);
     } else if (widgetId === "play2") {
       this.startNewRun(1);
-    } else if (widgetId === "options") {
-      this.menuScreen = "options";
+    } else if (widgetId === "options" || widgetId === "pauseOptions") {
+      this.optionsOpen = true;
     } else if (widgetId === "fullscreen" || widgetId === "optFullscreen") {
       void this.toggleFullscreen();
     } else if (widgetId === "optMusic") {
@@ -4184,7 +4203,11 @@ class PyoroWebGame {
     } else if (widgetId === "optReset") {
       this.resetSaveData();
     } else if (widgetId === "optBack") {
-      this.menuScreen = "main";
+      this.optionsOpen = false;
+    } else if (widgetId === "pauseResume") {
+      this.resume();
+    } else if (widgetId === "pauseQuit" || widgetId === "gameOverMenu") {
+      this.enterMainMenu();
     }
   }
 
@@ -4200,7 +4223,7 @@ class PyoroWebGame {
     };
   }
 
-  drawMenuText(context, text, x, y, fontSize, align = "center") {
+  drawMenuText(context, text, x, y, fontSize, align = "center", fillStyle = "#ffffff") {
     context.save();
     context.font = `${fontSize}px "Pyoro UI", monospace`;
     context.textAlign = align;
@@ -4208,27 +4231,54 @@ class PyoroWebGame {
     context.lineJoin = "round";
     context.lineWidth = Math.max(3, Math.round(fontSize * 0.18));
     context.strokeStyle = "rgba(0, 0, 0, 0.7)";
-    context.fillStyle = "#ffffff";
+    context.fillStyle = fillStyle;
     context.strokeText(text, x, y);
     context.fillText(text, x, y);
+    context.restore();
+  }
+
+  drawDialogFrame(context, x, y, width, height) {
+    const frame = this.assets.get("menu_frame");
+    if (frame) {
+      this.drawNinePatch(context, frame, x, y, width, height, 5, 10);
+      return;
+    }
+
+    context.save();
+    context.fillStyle = "rgba(0, 0, 0, 0.55)";
+    context.fillRect(x, y, width, height);
     context.restore();
   }
 
   drawMenu(context) {
     const w = this.canvas.width;
     const h = this.canvas.height;
+    const screen = this.canvasUiScreen();
 
-    if (this.menuScreen === "options") {
-      const frame = this.assets.get("menu_frame");
-      if (frame) {
-        this.drawNinePatch(context, frame, 0, 0, w, h, 5, 10);
-      } else {
-        context.save();
-        context.fillStyle = "rgba(0, 0, 0, 0.55)";
-        context.fillRect(0, 0, w, h);
-        context.restore();
-      }
-
+    if (screen === "pause") {
+      this.drawDialogFrame(context, 0.34 * w, 0.24 * h, 0.32 * w, 0.52 * h);
+      this.drawMenuText(context, "Pause", 0.5 * w, 0.33 * h, Math.round(h * 0.045));
+    } else if (screen === "gameover") {
+      this.drawDialogFrame(context, 0.34 * w, 0.26 * h, 0.32 * w, 0.48 * h);
+      this.drawMenuText(context, "Game Over", 0.5 * w, 0.35 * h, Math.round(h * 0.045));
+      this.drawMenuText(
+        context,
+        `Score: ${formatScore(this.score)}`,
+        0.5 * w,
+        0.48 * h,
+        Math.round(h * 0.032),
+      );
+      this.drawMenuText(
+        context,
+        "Space or R for a rematch",
+        0.5 * w,
+        0.7 * h,
+        Math.round(h * 0.02),
+        "center",
+        "#d9d6f0",
+      );
+    } else if (screen === "options") {
+      this.drawDialogFrame(context, 0, 0, w, h);
       this.drawMenuText(context, "Options", 0.5 * w, 0.09 * h, Math.round(h * 0.05));
       for (const [index, row] of this.optionsRows().entries()) {
         this.drawMenuText(
@@ -4269,6 +4319,23 @@ class PyoroWebGame {
       const [left, top, width, height] = widget.rect;
       const hovered = this.menuHoverId === widget.id;
       const pressed = hovered && this.menuPressedId === widget.id;
+
+      if (widget.type === "text") {
+        // Clickable text like the original's ClickableText widgets:
+        // highlighted while hovered, dimmed while pressed.
+        const color = pressed ? "#d2a92a" : hovered ? "#ffd54a" : "#ffffff";
+        this.drawMenuText(
+          context,
+          widget.label,
+          left + width / 2,
+          top + height / 2,
+          Math.round(h * widget.fontScale),
+          "center",
+          color,
+        );
+        continue;
+      }
+
       const variant = pressed ? "_click" : hovered ? "_hover" : "";
       const image = this.assets.get(`${widget.image}${variant}`)
         || this.assets.get(widget.image);
@@ -4352,13 +4419,12 @@ class PyoroWebGame {
       popup.draw(this.context);
     }
 
-    if (this.mainMenu) {
-      this.drawMenu(this.context);
-      return;
+    if (this.started && !this.mainMenu) {
+      this.drawCanvasHud(this.context);
     }
 
-    if (this.started) {
-      this.drawCanvasHud(this.context);
+    if (this.canvasUiScreen()) {
+      this.drawMenu(this.context);
     }
   }
 

@@ -235,8 +235,7 @@ button:disabled {
   display: grid;
   place-items: center;
   padding: 20px;
-  background: rgba(10, 10, 20, 0.58);
-  backdrop-filter: blur(6px);
+  background: rgba(0, 0, 0, 0.5);
 }
 
 .overlay.hidden {
@@ -247,25 +246,62 @@ button:disabled {
   display: none !important;
 }
 
+/* The loading/asset-failure card is drawn with the game's own frame.png
+   nine-patch and font so it looks like an in-game dialog. */
 .overlay-card {
   width: min(92%, 420px);
   padding: 24px;
-  border: 1px solid rgba(255, 255, 255, 0.14);
-  border-radius: 22px;
-  background: rgba(18, 16, 46, 0.92);
+  border: 12px solid transparent;
+  border-image: url("../src/data/images/gui/frame.png") 5 fill stretch;
+  image-rendering: pixelated;
+  border-radius: 0;
   text-align: center;
-  box-shadow: 0 18px 44px rgba(0, 0, 0, 0.4);
+  box-shadow: none;
+  font-family: "Pyoro UI", monospace;
 }
 
 .overlay-card h1 {
   margin: 0 0 10px;
   font-size: clamp(1.4rem, 3vw, 2rem);
+  color: #ffffff;
+  text-shadow:
+    2px 2px 0 rgba(0, 0, 0, 0.7),
+    -2px 2px 0 rgba(0, 0, 0, 0.7),
+    2px -2px 0 rgba(0, 0, 0, 0.7),
+    -2px -2px 0 rgba(0, 0, 0, 0.7);
 }
 
 .overlay-card p {
   margin: 0 0 18px;
-  color: var(--text-dim);
+  color: #e9e7f8;
   line-height: 1.5;
+}
+
+.overlay-card button {
+  background: url("../src/data/images/gui/button/button.png");
+  background-size: 100% 100%;
+  image-rendering: pixelated;
+  border-radius: 0;
+  box-shadow: none;
+  padding: 14px 30px;
+  color: #ffffff;
+  text-shadow: 1px 1px 0 rgba(0, 0, 0, 0.7);
+}
+
+.overlay-card button:hover:not(:disabled) {
+  background-image: url("../src/data/images/gui/button/button_hover.png");
+  transform: none;
+  filter: none;
+}
+
+.overlay-card button:active:not(:disabled) {
+  background-image: url("../src/data/images/gui/button/button_click.png");
+  transform: none;
+}
+
+.overlay-card button:disabled {
+  background-image: url("../src/data/images/gui/button/button_disable.png");
+  opacity: 0.9;
 }
 
 .help-grid {
